@@ -64,7 +64,7 @@ def main():
     - action: rest_command.vacuum_drive_move
       data:
         velocity: "0"
-        angle: "{{ states('input_number.vacuum_drive_speed') | float(50) / 100 * 180 }}\""""
+        angle: "{{ (states('input_number.vacuum_drive_speed') | float(50) / 100 * 180) * -1 }}""""
     
     old_drive_right = """vacuum_drive_right:
   alias: Vacuum Drive Right
@@ -82,7 +82,7 @@ def main():
     - action: rest_command.vacuum_drive_move
       data:
         velocity: "0"
-        angle: "{{ (states('input_number.vacuum_drive_speed') | float(50) / 100 * 180) * -1 }}\""""
+        angle: "{{ states('input_number.vacuum_drive_speed') | float(50) / 100 * 180 }}""""
     
     content = content.replace(old_drive_forward, new_drive_forward)
     content = content.replace(old_drive_backward, new_drive_backward)

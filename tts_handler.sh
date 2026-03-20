@@ -10,6 +10,10 @@
 #   GET  /volume         - Get current speaker volume
 #   GET  /mic_volume/N   - Set microphone gain (0-100)
 #   GET  /mic_volume     - Get current microphone gain
+#   GET  /obstacle_photos         - List obstacle detection photos with metadata
+#   GET  /obstacle_photos/FILE    - Get single obstacle photo as base64 JSON
+#   GET  /floor_types             - Get floor material detection per room (JSON)
+#   GET  /room_types              - Get room type classifications
 #   GET  /status         - Get vacuum state (status, battery, mode, fan, water)
 #   GET  /start          - Start cleaning
 #   GET  /stop           - Stop cleaning
@@ -660,7 +664,77 @@ case "$BASE_PATH" in
         LD_PRELOAD=/data/vacuumstreamer/vacuumstreamer.so /data/vacuumstreamer/video_monitor > /dev/null 2>&1 &
         send_json_response "200 OK" "{\"profile\":\"$NEW_PROFILE\",\"width\":$VW,\"height\":$VH,\"framerate\":$VF,\"bitrate\":$VB}"
         ;;
+
+    # ---- Object Detection / AI Results ----
+    /obstacle_photos)
+        AI_DIR="/data/ai_offline_collection"
+        if [ ! -d "$AI_DIR" ]; then
+            send_json_response "200 OK" "[]"
+            exit 0
+        fi
+        RESULT="["
+        FIRST=1
+        for IMGFILE in "$AI_DIR"/*.jpg "$AI_DIR"/*.JPG; do
+            [ -f "$IMGFILE" ] || continue
+            FNAME=$(basename "$IMGFILE")
+            # Filename format: timestamp_angle_confidence.jpg
+            TS=$(echo "$FNAME" | cut -d_ -f1)
+            ANGLE=$(echo "$FNAME" | cut -d_ -f2)
+            CONF=$(echo "$FNAME" | cut -d_ -f3 | sed 's/\.[Jj][Pp][Gg]$//')
+            if [ "$FIRST" = "1" ]; then
+                FIRST=0
+            else
+                RESULT="$RESULT,"
+            fi
+            RESULT="$RESULT{\"filename\":\"$FNAME\",\"timestamp\":$TS,\"angle\":$ANGLE,\"confidence\":$CONF}"
+        done
+        RESULT="$RESULT]"
+        send_json_response "200 OK" "$RESULT"
+        ;;
+    /obstacle_photos/*)
+        FNAME=$(echo "$BASE_PATH" | sed 's|/obstacle_photos/||')
+        # Sanitize: no slashes or dots-dot allowed
+        FNAME=$(echo "$FNAME" | sed 's|/||g; s|\.\.|.|g')
+        IMGFILE="/data/ai_offline_collection/$FNAME"
+        if [ ! -f "$IMGFILE" ]; then
+            send_response "404 Not Found" "photo not found: $FNAME"
+            exit 0
+        fi
+        B64=$(base64 "$IMGFILE" | tr -d '\n')
+        send_json_response "200 OK" "{\"filename\":\"$FNAME\",\"data\":\"$B64\"}"
+        ;;
+    /floor_types)
+        MAP_DIR="/data/DivideAI/ai_result"
+        # DivideAI uses its own numeric map IDs independent of maploader slots
+        ACTIVE_MAP=$(ls "$MAP_DIR" 2>/dev/null | sort -n | tail -1)
+        FLOORS_FILE="$MAP_DIR/$ACTIVE_MAP/ai_floors_large.txt"
+        if [ -f "$FLOORS_FILE" ]; then
+            CONTENT=$(cat "$FLOORS_FILE")
+            send_json_response "200 OK" "$CONTENT"
+        else
+            send_json_response "200 OK" "{\"ai_material\":[]}"
+        fi
+        ;;
+    /room_types)
+        MAP_DIR="/data/DivideAI/ai_result"
+        # DivideAI uses its own numeric map IDs independent of maploader slots
+        ACTIVE_MAP=$(ls "$MAP_DIR" 2>/dev/null | sort -n | tail -1)
+        ROOMS_FILE="$MAP_DIR/$ACTIVE_MAP/ai_rooms_large.txt"
+        if [ -f "$ROOMS_FILE" ]; then
+            RESULT="["
+            FIRST=1
+            while IFS=' ' read -r ROOM_ID ROOM_TYPE LABEL; do
+                [ -z "$ROOM_ID" ] && continue
+                if [ "$FIRST" = "1" ]; then FIRST=0; else RESULT="$RESULT,"; fi
+                RESULT="$RESULT{\"room_id\":$ROOM_ID,\"type\":$ROOM_TYPE,\"label\":$LABEL}"
+            done < "$ROOMS_FILE"
+            RESULT="$RESULT]"
+            send_json_response "200 OK" "$RESULT"
+        else
+            send_json_response "200 OK" "[]"
+        fi
+        ;;
     *)
-        send_response "404 Not Found" "endpoints: /say, /play, /play_ogg, /test, /volume[/N], /mic_volume[/N], /status, /start, /stop, /pause, /home, /mode[/MODE], /fan_speed[/SPEED], /water_usage[/LEVEL], /drive/enable, /drive/disable, /drive/move, /drive/speed[/N], /video_quality[/PROFILE], /segments, /segments/clean, /statistics, /consumables, /dnd, /carpet_mode[/MODE], /obstacle_images[/enable|disable], /obstacle_avoidance[/enable|disable], /child_lock[/enable|disable], /auto_empty_interval[/INTERVAL], /quirks, /quirk/ID"
+        send_response "404 Not Found" "endpoints: /say, /play, /play_ogg, /test, /volume[/N], /mic_volume[/N], /status, /start, /stop, /pause, /home, /mode[/MODE], /fan_speed[/SPEED], /water_usage[/LEVEL], /drive/enable, /drive/disable, /drive/move, /drive/speed[/N], /video_quality[/PROFILE], /segments, /segments/clean, /statistics, /consumables, /dnd, /carpet_mode[/MODE], /obstacle_images[/enable|disable], /obstacle_avoidance[/enable|disable], /child_lock[/enable|disable], /auto_empty_interval[/INTERVAL], /quirks, /quirk/ID, /obstacle_photos[/FILE], /floor_types, /room_types"
         ;;
 esac
