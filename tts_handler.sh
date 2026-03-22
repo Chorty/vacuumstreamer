@@ -34,6 +34,8 @@
 #   GET  /video_quality/PROFILE - Set video quality (low, high)
 #   GET  /segments       - List map segments (rooms)
 #   POST /segments/clean - Clean specific segments: JSON body {"segment_ids": ["1","2"]}
+#   POST /goto           - Go to map coordinates: JSON body {"x": N, "y": N}
+#   GET  /location       - Get current robot X,Y position on map
 #   GET  /statistics     - Get total and current cleaning statistics
 #   GET  /consumables    - Get consumable remaining life
 #   GET  /dnd            - Get Do Not Disturb configuration
@@ -405,6 +407,42 @@ case "$BASE_PATH" in
             send_response "200 OK" "$RESULT"
         else
             send_response "400 Bad Request" "POST JSON body: {\"segment_ids\": [\"1\",\"2\"], \"iterations\": 1}"
+        fi
+        ;;
+
+    # ---- GoToLocation / Sentry ----
+    /goto)
+        if [ "$METHOD" = "POST" ] && [ "$CONTENT_LENGTH" -gt 0 ]; then
+            BODY=$(dd bs=1 count=$CONTENT_LENGTH 2>/dev/null)
+            X=$(echo "$BODY" | grep -o '"x":[0-9-]*' | cut -d: -f2)
+            Y=$(echo "$BODY" | grep -o '"y":[0-9-]*' | cut -d: -f2)
+            if [ -n "$X" ] && [ -n "$Y" ]; then
+                RESULT=$(curl -s -m 10 -X PUT -H "Content-Type: application/json" \
+                    -d "{\"action\":\"goto\",\"coordinates\":{\"x\":$X,\"y\":$Y}}" \
+                    "$VALETUDO/api/v2/robot/capabilities/GoToLocationCapability" 2>/dev/null)
+                send_json_response "200 OK" "{\"x\":$X,\"y\":$Y,\"status\":\"ok\"}"
+            else
+                send_response "400 Bad Request" "POST JSON: {\"x\": N, \"y\": N}"
+            fi
+        else
+            send_response "400 Bad Request" "POST JSON: {\"x\": N, \"y\": N}"
+        fi
+        ;;
+
+    /location)
+        # Return current robot X,Y from map state (useful for coordinate setup)
+        MAP=$(curl -s -m 5 "$VALETUDO/api/v2/robot/state/map" 2>/dev/null)
+        if [ -n "$MAP" ]; then
+            # Robot entity is type "robot_position" in map entities
+            X=$(echo "$MAP" | grep -o '"type":"robot_position"[^}]*"x":[0-9-]*' | grep -o '"x":[0-9-]*' | cut -d: -f2)
+            Y=$(echo "$MAP" | grep -o '"type":"robot_position"[^}]*"y":[0-9-]*' | grep -o '"y":[0-9-]*' | cut -d: -f2)
+            if [ -n "$X" ] && [ -n "$Y" ]; then
+                send_json_response "200 OK" "{\"x\":$X,\"y\":$Y}"
+            else
+                send_json_response "200 OK" "{\"x\":null,\"y\":null,\"note\":\"position unavailable\"}"
+            fi
+        else
+            send_response "502 Bad Gateway" "valetudo unreachable"
         fi
         ;;
 
