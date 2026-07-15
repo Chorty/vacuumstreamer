@@ -628,6 +628,8 @@ case "$BASE_PATH" in
             fi
             if [ -n "$Q_VAL" ]; then
                 send_json_response "200 OK" "{\"id\":\"$QUIRK_ID\",\"value\":\"$Q_VAL\"}"
+            elif echo "$RESULT" | tr '{' '\n' | grep -q "\"$QUIRK_ID\""; then
+                send_json_response "200 OK" "{\"id\":\"$QUIRK_ID\",\"value\":null}"
             else
                 send_response "404 Not Found" "quirk not found: $QUIRK_ID"
             fi

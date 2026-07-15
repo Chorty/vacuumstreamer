@@ -18,7 +18,7 @@ if [ ! "$(readlink /data/config/system/localtime)" -ef "/usr/share/zoneinfo/UTC"
 fi
 
 if [[ -f /data/valetudo ]]; then
-        VALETUDO_CONFIG_PATH=/data/valetudo_config.json /data/valetudo > /dev/null 2>&1 &
+        /data/valetudo_watchdog.sh > /dev/null 2>&1 &
         VALETUDO_CONFIG_PATH=/data/valetudo_config.json /data/maploader-binary > /dev/null 2>&1 &
 fi
 
@@ -40,6 +40,9 @@ if [[ -f /data/vacuumstreamer/video_monitor ]]; then
     LD_PRELOAD=/data/vacuumstreamer/vacuumstreamer.so /data/vacuumstreamer/video_monitor > /dev/null 2>&1 &
     /data/vacuumstreamer/go2rtc -c /data/vacuumstreamer/go2rtc.yaml > /dev/null 2>&1 &
 
-    # TTS/Audio playback HTTP server on port 6971
-    tcpsvd -vE 0.0.0.0 6971 /data/vacuumstreamer/tts_handler.sh > /dev/null 2>&1 &
+    # TTS/HTTP bridge watchdog — respawns tcpsvd if it dies
+    ( while true; do
+        tcpsvd -vE 0.0.0.0 6971 /data/vacuumstreamer/tts_handler.sh > /dev/null 2>&1
+        sleep 2
+    done ) &
 fi
