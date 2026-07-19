@@ -18,7 +18,11 @@ if [ ! "$(readlink /data/config/system/localtime)" -ef "/usr/share/zoneinfo/UTC"
 fi
 
 if [[ -f /data/valetudo ]]; then
-        /data/valetudo_watchdog.sh > /dev/null 2>&1 &
+        if [ -x /data/valetudo_watchdog.sh ]; then
+                /data/valetudo_watchdog.sh > /dev/null 2>&1 &
+        else
+                VALETUDO_CONFIG_PATH=/data/valetudo_config.json /data/valetudo > /dev/null 2>&1 &
+        fi
         VALETUDO_CONFIG_PATH=/data/valetudo_config.json /data/maploader-binary > /dev/null 2>&1 &
 fi
 

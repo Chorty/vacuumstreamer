@@ -414,13 +414,23 @@ case "$BASE_PATH" in
     /goto)
         if [ "$METHOD" = "POST" ] && [ "$CONTENT_LENGTH" -gt 0 ]; then
             BODY=$(dd bs=1 count=$CONTENT_LENGTH 2>/dev/null)
-            X=$(echo "$BODY" | grep -o '"x":[0-9-]*' | cut -d: -f2)
-            Y=$(echo "$BODY" | grep -o '"y":[0-9-]*' | cut -d: -f2)
+            X=$(echo "$BODY" | grep -oE '"x"[[:space:]]*:[[:space:]]*-?[0-9]+' | head -n1 | sed 's/.*:[[:space:]]*//')
+            Y=$(echo "$BODY" | grep -oE '"y"[[:space:]]*:[[:space:]]*-?[0-9]+' | head -n1 | sed 's/.*:[[:space:]]*//')
             if [ -n "$X" ] && [ -n "$Y" ]; then
-                RESULT=$(curl -s -m 10 -X PUT -H "Content-Type: application/json" \
+                RESULT=$(curl -s -m 10 -w '\n%{http_code}' -X PUT -H "Content-Type: application/json" \
                     -d "{\"action\":\"goto\",\"coordinates\":{\"x\":$X,\"y\":$Y}}" \
                     "$VALETUDO/api/v2/robot/capabilities/GoToLocationCapability" 2>/dev/null)
-                send_json_response "200 OK" "{\"x\":$X,\"y\":$Y,\"status\":\"ok\"}"
+                CURL_EXIT=$?
+                HTTP_CODE=$(echo "$RESULT" | tail -n1)
+                if [ "$CURL_EXIT" -eq 28 ]; then
+                    send_response "504 Gateway Timeout" "valetudo timed out"
+                elif [ "$CURL_EXIT" -ne 0 ]; then
+                    send_response "502 Bad Gateway" "valetudo unreachable"
+                elif [ "$HTTP_CODE" -ge 200 ] 2>/dev/null && [ "$HTTP_CODE" -lt 300 ]; then
+                    send_json_response "200 OK" "{\"x\":$X,\"y\":$Y,\"status\":\"ok\"}"
+                else
+                    send_json_response "502 Bad Gateway" "{\"x\":$X,\"y\":$Y,\"status\":\"error\",\"valetudo_status\":\"$HTTP_CODE\"}"
+                fi
             else
                 send_response "400 Bad Request" "POST JSON: {\"x\": N, \"y\": N}"
             fi
@@ -433,9 +443,10 @@ case "$BASE_PATH" in
         # Return current robot X,Y from map state (useful for coordinate setup)
         MAP=$(curl -s -m 5 "$VALETUDO/api/v2/robot/state/map" 2>/dev/null)
         if [ -n "$MAP" ]; then
-            # Robot entity is type "robot_position" in map entities
-            X=$(echo "$MAP" | grep -o '"type":"robot_position"[^}]*"x":[0-9-]*' | grep -o '"x":[0-9-]*' | cut -d: -f2)
-            Y=$(echo "$MAP" | grep -o '"type":"robot_position"[^}]*"y":[0-9-]*' | grep -o '"y":[0-9-]*' | cut -d: -f2)
+            # Robot pose is a PointMapEntity: {...,"points":[x,y],"type":"robot_position"}
+            POS=$(echo "$MAP" | grep -oE '"points":\[-?[0-9]+,-?[0-9]+\],"type":"robot_position"' | head -n1)
+            X=$(echo "$POS" | sed -n 's/.*\[\(-\{0,1\}[0-9]\{1,\}\),.*/\1/p')
+            Y=$(echo "$POS" | sed -n 's/.*,\(-\{0,1\}[0-9]\{1,\}\)\].*/\1/p')
             if [ -n "$X" ] && [ -n "$Y" ]; then
                 send_json_response "200 OK" "{\"x\":$X,\"y\":$Y}"
             else
