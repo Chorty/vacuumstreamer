@@ -414,9 +414,9 @@ case "$BASE_PATH" in
     /goto)
         if [ "$METHOD" = "POST" ] && [ "$CONTENT_LENGTH" -gt 0 ]; then
             BODY=$(dd bs=1 count=$CONTENT_LENGTH 2>/dev/null)
-            X=$(echo "$BODY" | grep -oE '"x"[[:space:]]*:[[:space:]]*-?[0-9]+' | head -n1 | sed 's/.*:[[:space:]]*//')
-            Y=$(echo "$BODY" | grep -oE '"y"[[:space:]]*:[[:space:]]*-?[0-9]+' | head -n1 | sed 's/.*:[[:space:]]*//')
-            if [ -n "$X" ] && [ -n "$Y" ]; then
+            X=$(echo "$BODY" | grep -oE '"x"[[:space:]]*:[[:space:]]*[^,}[:space:]]*' | head -n1 | sed 's/.*:[[:space:]]*//')
+            Y=$(echo "$BODY" | grep -oE '"y"[[:space:]]*:[[:space:]]*[^,}[:space:]]*' | head -n1 | sed 's/.*:[[:space:]]*//')
+            if echo "$X" | grep -qE '^-?[0-9]+$' && echo "$Y" | grep -qE '^-?[0-9]+$'; then
                 RESULT=$(curl -s -m 10 -w '\n%{http_code}' -X PUT -H "Content-Type: application/json" \
                     -d "{\"action\":\"goto\",\"coordinates\":{\"x\":$X,\"y\":$Y}}" \
                     "$VALETUDO/api/v2/robot/capabilities/GoToLocationCapability" 2>/dev/null)
