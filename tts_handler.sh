@@ -34,6 +34,8 @@
 #   GET  /video_quality/PROFILE - Set video quality (low, high)
 #   GET  /segments       - List map segments (rooms)
 #   POST /segments/clean - Clean specific segments: JSON body {"segment_ids": ["1","2"]}
+#   POST /goto           - Go to map coordinates: JSON body {"x": N, "y": N}
+#   GET  /location       - Get current robot X,Y position on map
 #   GET  /statistics     - Get total and current cleaning statistics
 #   GET  /consumables    - Get consumable remaining life
 #   GET  /dnd            - Get Do Not Disturb configuration
@@ -408,6 +410,53 @@ case "$BASE_PATH" in
         fi
         ;;
 
+    # ---- GoToLocation / Sentry ----
+    /goto)
+        if [ "$METHOD" = "POST" ] && [ "$CONTENT_LENGTH" -gt 0 ]; then
+            BODY=$(dd bs=1 count=$CONTENT_LENGTH 2>/dev/null)
+            X=$(echo "$BODY" | grep -oE '"x"[[:space:]]*:[[:space:]]*[^,}[:space:]]*' | head -n1 | sed 's/.*:[[:space:]]*//')
+            Y=$(echo "$BODY" | grep -oE '"y"[[:space:]]*:[[:space:]]*[^,}[:space:]]*' | head -n1 | sed 's/.*:[[:space:]]*//')
+            if echo "$X" | grep -qE '^-?[0-9]+$' && echo "$Y" | grep -qE '^-?[0-9]+$'; then
+                RESULT=$(curl -s -m 10 -w '\n%{http_code}' -X PUT -H "Content-Type: application/json" \
+                    -d "{\"action\":\"goto\",\"coordinates\":{\"x\":$X,\"y\":$Y}}" \
+                    "$VALETUDO/api/v2/robot/capabilities/GoToLocationCapability" 2>/dev/null)
+                CURL_EXIT=$?
+                HTTP_CODE=$(echo "$RESULT" | tail -n1)
+                if [ "$CURL_EXIT" -eq 28 ]; then
+                    send_response "504 Gateway Timeout" "valetudo timed out"
+                elif [ "$CURL_EXIT" -ne 0 ]; then
+                    send_response "502 Bad Gateway" "valetudo unreachable"
+                elif [ "$HTTP_CODE" -ge 200 ] 2>/dev/null && [ "$HTTP_CODE" -lt 300 ]; then
+                    send_json_response "200 OK" "{\"x\":$X,\"y\":$Y,\"status\":\"ok\"}"
+                else
+                    send_json_response "502 Bad Gateway" "{\"x\":$X,\"y\":$Y,\"status\":\"error\",\"valetudo_status\":\"$HTTP_CODE\"}"
+                fi
+            else
+                send_response "400 Bad Request" "POST JSON: {\"x\": N, \"y\": N}"
+            fi
+        else
+            send_response "400 Bad Request" "POST JSON: {\"x\": N, \"y\": N}"
+        fi
+        ;;
+
+    /location)
+        # Return current robot X,Y from map state (useful for coordinate setup)
+        MAP=$(curl -s -m 5 "$VALETUDO/api/v2/robot/state/map" 2>/dev/null)
+        if [ -n "$MAP" ]; then
+            # Robot pose is a PointMapEntity: {...,"points":[x,y],"type":"robot_position"}
+            POS=$(echo "$MAP" | grep -oE '"points":\[-?[0-9]+,-?[0-9]+\],"type":"robot_position"' | head -n1)
+            X=$(echo "$POS" | sed -n 's/.*\[\(-\{0,1\}[0-9]\{1,\}\),.*/\1/p')
+            Y=$(echo "$POS" | sed -n 's/.*,\(-\{0,1\}[0-9]\{1,\}\)\].*/\1/p')
+            if [ -n "$X" ] && [ -n "$Y" ]; then
+                send_json_response "200 OK" "{\"x\":$X,\"y\":$Y}"
+            else
+                send_json_response "200 OK" "{\"x\":null,\"y\":null,\"note\":\"position unavailable\"}"
+            fi
+        else
+            send_response "502 Bad Gateway" "valetudo unreachable"
+        fi
+        ;;
+
     # ---- Statistics ----
     /statistics)
         TOTAL=$(curl -s -m 5 "$VALETUDO/api/v2/robot/capabilities/TotalStatisticsCapability" 2>/dev/null)
@@ -590,6 +639,8 @@ case "$BASE_PATH" in
             fi
             if [ -n "$Q_VAL" ]; then
                 send_json_response "200 OK" "{\"id\":\"$QUIRK_ID\",\"value\":\"$Q_VAL\"}"
+            elif echo "$RESULT" | tr '{' '\n' | grep -q "\"$QUIRK_ID\""; then
+                send_json_response "200 OK" "{\"id\":\"$QUIRK_ID\",\"value\":null}"
             else
                 send_response "404 Not Found" "quirk not found: $QUIRK_ID"
             fi
