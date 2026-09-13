@@ -85,6 +85,7 @@ echo "video_monitor preload=[${LD_PRELOAD:-unset}]"
 EOF
     cat > "$VS_DIR/bin/pidof" <<'EOF'
 #!/bin/sh
+echo "pidof $*" >> "$VS_STATE/calls"
 [ -e "$VS_STATE/running_$1" ]
 EOF
     cat > "$VS_DIR/bin/killall" <<'EOF'
@@ -137,8 +138,10 @@ EOF
     VS_CREDENTIALS_DIR="$VS_DIR/credentials"
     VS_LOG="$VS_DIR/vacuumstreamer.log"
     VS_RUN_DIR="$VS_DIR/run"
+    # Most tests drive port state through the netstat stub
+    VS_PROC_NET_TCP="$VS_STATE/no_proc_net_tcp"
     PATH="$VS_DIR/bin:$ORIGINAL_PATH"
-    export VS_DIR VS_STATE VS_CONF VS_CREDENTIALS_DIR VS_LOG VS_RUN_DIR PATH
+    export VS_DIR VS_STATE VS_CONF VS_CREDENTIALS_DIR VS_LOG VS_RUN_DIR VS_PROC_NET_TCP PATH
 }
 
 set_conf() {
@@ -179,6 +182,25 @@ supervise() {
 
 calls() {
     cat "$VS_STATE/calls" 2>/dev/null
+}
+
+loaded() {
+    $TEST_SH -c '. "$VS_DIR/vacuumstreamer_lib.sh"; vs_conf_load; vs_conf_value "$1" "$2"; echo "$VS_VAL"' loaded "$@"
+}
+
+count_commands() {
+    local c real
+
+    mkdir -p "$VS_DIR/counting"
+
+    for c in sed tail cut awk netstat cat mkdir date tr ls grep curl; do
+        real=$(PATH="$ORIGINAL_PATH" command -v "$c") || continue
+        printf '#!/bin/sh\necho "exec %s" >> "$VS_STATE/calls"\nexec %s "$@"\n' "$c" "$real" > "$VS_DIR/counting/$c"
+        chmod 755 "$VS_DIR/counting/$c"
+    done
+
+    PATH="$VS_DIR/counting:$PATH"
+    export PATH
 }
 
 boot_actions() {
@@ -227,6 +249,73 @@ check "a command in a value never runs" "no" "$(exists "$VS_DIR/pwned")"
 
 new_case
 check "an invalid key is rejected" "fallback" "$(lib vs_conf_get 'CAMERA;x' fallback)"
+
+# --- Builtin config reader matches vs_conf_get ---
+
+new_case
+printf '%s\n' "# comment" "  CAMERA = off   # trailing" "CAMERA_LOGIN=on" "TTS=off" "TTS=on" \
+    "MAP_MANAGEMENT=off" "MAP_MANAGEMENT=" "HTTP_BRIDGE==weird" "CA#MERA=off" "camera=off" \
+    "	CAMERA_MODE	=	always	" "CAMERA_IDLE_SECONDS=1 2" 'CAMERA_STALL_SECONDS=$(touch "$VS_DIR/pwned")' > "$VS_CONF"
+printf 'CAMERA_WAKE_TIMEOUT_SECONDS=9\r' >> "$VS_CONF"
+for key in CAMERA CAMERA_LOGIN TTS MAP_MANAGEMENT HTTP_BRIDGE CAMERA_MODE CAMERA_IDLE_SECONDS CAMERA_STALL_SECONDS CAMERA_WAKE_TIMEOUT_SECONDS MISSING; do
+    check "builtin reader matches vs_conf_get for $key" "$(lib vs_conf_get "$key" fallback)" "$(loaded "$key" fallback)"
+done
+check "the builtin reader never runs a value" "no" "$(exists "$VS_DIR/pwned")"
+
+new_case
+check "the builtin reader handles a missing config" "fallback" "$(loaded CAMERA fallback)"
+
+new_case
+set_conf "CAMERA=maybe" "CAMERA_IDLE_SECONDS=5" "CAMERA_MODE=sometimes"
+OUT=$($TEST_SH -c '. "$VS_DIR/vacuumstreamer_lib.sh"; vs_conf_load
+    vs_setting_switch CAMERA on; a="$VS_VAL"; vs_setting_switch CAMERA on
+    vs_setting_number CAMERA_IDLE_SECONDS 180 30 86400; b="$VS_VAL"
+    vs_setting_camera_mode; echo "$a $VS_VAL $b"')
+check "invalid settings fall back to their defaults" "on on_demand 180" "$OUT"
+check "an invalid setting is logged once" "1" "$(grep -c 'invalid value for CAMERA in' "$VS_LOG")"
+
+# --- Port state from /proc/net/tcp ---
+
+new_case
+cat > "$VS_STATE/tcp" <<'EOF'
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000:1B39 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 101
+   1: 0100007F:1B39 0100007F:C350 01 00000000:00000000 00:00000000 00000000     0        0 102
+   2: 0100007F:C350 0100007F:1B39 01 00000000:00000000 00:00000000 00000000     0        0 103
+   3: 00000000:07C0 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 104
+EOF
+OUT=$(VS_PROC_NET_TCP="$VS_STATE/tcp" $TEST_SH -c '. "$VS_DIR/vacuumstreamer_lib.sh"; vs_tcp_port_state 6969; echo "$VS_PORT_LISTENING $VS_PORT_CONNECTED"')
+check "a listener and a connected viewer are read from /proc/net/tcp" "yes yes" "$OUT"
+
+new_case
+cat > "$VS_STATE/tcp" <<'EOF'
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:C350 0100007F:1B39 01 00000000:00000000 00:00000000 00000000     0        0 103
+   1: 00000000:1B3A 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 104
+EOF
+OUT=$(VS_PROC_NET_TCP="$VS_STATE/tcp" $TEST_SH -c '. "$VS_DIR/vacuumstreamer_lib.sh"; vs_tcp_port_state 6969; echo "$VS_PORT_LISTENING $VS_PORT_CONNECTED"')
+check "a client-side connection or another port is not the camera" "no no" "$OUT"
+
+# --- Runtime state helpers ---
+
+new_case
+check "a missing state value uses the default" "7" "$(lib vs_state_get missing 7)"
+set_run_state junk "abc"
+check "a non-numeric state value uses the default" "7" "$(lib vs_state_get junk 7)"
+rm -rf "$VS_RUN_DIR"
+lib vs_state_set created 42
+check "storing state creates the runtime directory" "42" "$(lib vs_state_get created 0)"
+
+# --- Supervisor idle loop starts few processes ---
+
+new_case
+printf '  sl  local_address rem_address   st\n   0: 00000000:07C0 00000000:0000 0A 0 0 0 0 0 0 0\n' > "$VS_STATE/tcp"
+touch "$VS_STATE/running_go2rtc"
+set_run_state go2rtc_started_at 0
+count_commands
+VS_PROC_NET_TCP="$VS_STATE/tcp" supervise 1000
+PATH="$VS_DIR/bin:$ORIGINAL_PATH"; export PATH
+check "an idle supervisor check only runs pidof" "$(printf 'pidof go2rtc\npidof video_monitor')" "$(calls)"
 
 # --- Numeric settings and camera mode ---
 

@@ -18,9 +18,14 @@ VS_SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 . "$VS_SCRIPT_DIR/vacuumstreamer_lib.sh"
 
 supervise_once() {
-    local now mode idle stall bytes since last wake
+    local mode idle stall bytes last wake
 
-    if ! vs_enabled CAMERA on; then
+    vs_conf_load
+    vs_setting_number CAMERA_SUPERVISE_SECONDS 5 1 300
+    VS_SUPERVISE_SECONDS="$VS_VAL"
+    vs_setting_switch CAMERA on
+
+    if [ "$VS_VAL" != "on" ]; then
         vs_log "supervisor: CAMERA=off in $VS_CONF; stopping the camera"
         vs_stop go2rtc
         vs_stop video_monitor
@@ -33,25 +38,31 @@ supervise_once() {
         return 0
     fi
 
-    now=$(vs_now)
-    mode=$(vs_camera_mode)
-    idle=$(vs_number CAMERA_IDLE_SECONDS 180 30 86400)
-    stall=$(vs_number CAMERA_STALL_SECONDS 20 10 600)
+    vs_now_var
+    vs_setting_camera_mode
+    mode="$VS_VAL"
+    vs_setting_number CAMERA_IDLE_SECONDS 180 30 86400
+    idle="$VS_VAL"
+    vs_setting_number CAMERA_STALL_SECONDS 20 10 600
+    stall="$VS_VAL"
 
-    vs_keep_running go2rtc "$VS_DIR/go2rtc_launch.sh" "$now"
+    vs_keep_running go2rtc "$VS_DIR/go2rtc_launch.sh" "$VS_NOW"
+    vs_tcp_port_state "$VS_CAMERA_PORT"
 
-    if vs_port_connected "$VS_CAMERA_PORT"; then
-        vs_state_set camera_last_active "$now"
+    if [ "$VS_PORT_CONNECTED" = "yes" ]; then
+        vs_state_set camera_last_active "$VS_NOW"
         bytes=$(vs_camera_bytes)
 
         if [ -n "$bytes" ]; then
-            if [ "$bytes" != "$(vs_state_get camera_bytes "")" ]; then
-                vs_state_set camera_bytes "$bytes"
-                vs_state_set camera_bytes_since "$now"
-            else
-                since=$(vs_state_get camera_bytes_since "$now")
+            vs_state_read camera_bytes ""
 
-                if [ $((now - since)) -ge "$stall" ]; then
+            if [ "$bytes" != "$VS_VAL" ]; then
+                vs_state_set camera_bytes "$bytes"
+                vs_state_set camera_bytes_since "$VS_NOW"
+            else
+                vs_state_read camera_bytes_since "$VS_NOW"
+
+                if [ $((VS_NOW - VS_VAL)) -ge "$stall" ]; then
                     vs_log "supervisor: no video for ${stall}s while a viewer is connected; restarting video_monitor"
                     vs_stop video_monitor
                     vs_state_set camera_bytes ""
@@ -59,17 +70,20 @@ supervise_once() {
             fi
         fi
     else
-        vs_state_set camera_bytes ""
+        vs_state_read camera_bytes ""
+        [ -z "$VS_VAL" ] || vs_state_set camera_bytes ""
 
         if [ "$mode" = "on_demand" ] && vs_running video_monitor; then
-            last=$(vs_state_get camera_last_active 0)
-            wake=$(vs_state_get camera_last_wake 0)
+            vs_state_read camera_last_active 0
+            last="$VS_VAL"
+            vs_state_read camera_last_wake 0
+            wake="$VS_VAL"
 
             if [ "$wake" -gt "$last" ]; then
                 last="$wake"
             fi
 
-            if [ $((now - last)) -ge "$idle" ]; then
+            if [ $((VS_NOW - last)) -ge "$idle" ]; then
                 vs_log "supervisor: no viewer for ${idle}s; stopping video_monitor"
                 vs_stop video_monitor
             fi
@@ -77,7 +91,7 @@ supervise_once() {
     fi
 
     if [ "$mode" = "always" ]; then
-        vs_keep_running video_monitor "$VS_DIR/video_monitor_launch.sh" "$now"
+        vs_keep_running video_monitor "$VS_DIR/video_monitor_launch.sh" "$VS_NOW"
     fi
 
     return 0
@@ -91,7 +105,7 @@ case "${1:-}" in
         ;;
 esac
 
-mkdir -p "$VS_RUN_DIR"
+[ -d "$VS_RUN_DIR" ] || mkdir -p "$VS_RUN_DIR"
 
 if [ "${1:-}" = "--once" ]; then
     supervise_once
@@ -109,7 +123,7 @@ vs_state_set camera_last_active "$(vs_now)"
 vs_log "supervisor: started (CAMERA_MODE=$(vs_camera_mode))"
 
 while supervise_once; do
-    sleep "$(vs_number CAMERA_SUPERVISE_SECONDS 5 1 300)"
+    sleep "$VS_SUPERVISE_SECONDS"
 done
 
 vs_log "supervisor: stopped"

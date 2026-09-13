@@ -14,6 +14,10 @@ VS_RUN_DIR="${VS_RUN_DIR:-/tmp/vacuumstreamer}"
 VS_CAMERA_PORT="${VS_CAMERA_PORT:-6969}"
 VS_GO2RTC_API="${VS_GO2RTC_API:-http://127.0.0.1:1984}"
 VS_UPTIME_FILE="${VS_UPTIME_FILE:-/proc/uptime}"
+VS_PROC_NET_TCP="${VS_PROC_NET_TCP:-/proc/net/tcp}"
+
+# Space, tab and carriage return, for trimming with shell builtins
+VS_BLANKS=" $(printf '\t\r')"
 
 vs_log() {
     echo "$(date '+%Y-%m-%dT%H:%M:%S') $*" >> "$VS_LOG" 2>/dev/null
@@ -100,6 +104,112 @@ vs_camera_mode() {
     esac
 }
 
+# --- Builtin helpers for the long-running supervisor -------------------------
+# The supervisor checks the camera every few seconds. These helpers use shell
+# builtins and return results in variables such as VS_VAL, so a check starts as
+# few processes as possible.
+
+# vs_trim VALUE - set VS_VAL to VALUE without surrounding spaces, tabs or CRs.
+vs_trim() {
+    VS_VAL="$1"
+    VS_VAL="${VS_VAL#"${VS_VAL%%[!$VS_BLANKS]*}"}"
+    VS_VAL="${VS_VAL%"${VS_VAL##*[!$VS_BLANKS]}"}"
+}
+
+# vs_conf_load - read VS_CONF into VS_C_<KEY> variables, following the same
+# rules as vs_conf_get: "#" starts a comment, whitespace around keys and values
+# is ignored, and the last occurrence of a key wins. Values are never executed.
+vs_conf_load() {
+    local line key value
+
+    for key in $VS_C_KEYS; do
+        unset "VS_C_$key"
+    done
+    VS_C_KEYS=""
+
+    [ -r "$VS_CONF" ] || return 0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%%#*}"
+
+        case "$line" in
+            *=*) ;;
+            *) continue ;;
+        esac
+
+        vs_trim "${line%%=*}"
+        key="$VS_VAL"
+
+        case "$key" in
+            "" | *[!A-Z0-9_]*) continue ;;
+        esac
+
+        vs_trim "${line#*=}"
+        value="$VS_VAL"
+        eval "VS_C_$key=\$value"
+        VS_C_KEYS="$VS_C_KEYS $key"
+    done < "$VS_CONF"
+}
+
+# vs_conf_value KEY DEFAULT - set VS_VAL to KEY from vs_conf_load, or DEFAULT.
+vs_conf_value() {
+    eval "VS_VAL=\${VS_C_$1:-}"
+    [ -n "$VS_VAL" ] || VS_VAL="$2"
+}
+
+# vs_warn_once KEY VALUE DEFAULT - log an invalid setting once per distinct value.
+vs_warn_once() {
+    local seen
+
+    eval "seen=\${VS_WARNED_$1:-}"
+    [ "$seen" = "$2" ] && return 0
+    eval "VS_WARNED_$1=\$2"
+    vs_log "invalid value for $1 in $VS_CONF; using $3"
+}
+
+# vs_setting_switch KEY DEFAULT - set VS_VAL to "on" or "off".
+vs_setting_switch() {
+    vs_conf_value "$1" "$2"
+
+    case "$VS_VAL" in
+        on | off) ;;
+        *)
+            vs_warn_once "$1" "$VS_VAL" "$2"
+            VS_VAL="$2"
+            ;;
+    esac
+}
+
+# vs_setting_number KEY DEFAULT MIN MAX - set VS_VAL to an integer in range.
+vs_setting_number() {
+    vs_conf_value "$1" "$2"
+
+    case "$VS_VAL" in
+        "" | *[!0-9]*) ;;
+        *)
+            if [ "${#VS_VAL}" -le 6 ] && [ "$VS_VAL" -ge "$3" ] && [ "$VS_VAL" -le "$4" ]; then
+                return 0
+            fi
+            ;;
+    esac
+
+    vs_warn_once "$1" "$VS_VAL" "$2"
+    VS_VAL="$2"
+}
+
+# vs_setting_camera_mode - set VS_VAL to "on_demand" or "always".
+vs_setting_camera_mode() {
+    vs_conf_value CAMERA_MODE on_demand
+
+    case "$VS_VAL" in
+        on_demand | always) ;;
+        *)
+            vs_warn_once CAMERA_MODE "$VS_VAL" on_demand
+            VS_VAL="on_demand"
+            ;;
+    esac
+}
+
 # vs_private_path PATH - succeed when PATH is not a symlink and grants no
 # permissions to group or others.
 vs_private_path() {
@@ -150,21 +260,25 @@ vs_camera_login_check() {
     fi
 }
 
-# vs_now - print seconds since boot, which keeps increasing when the robot syncs
-# its clock after boot. Runtime state lives in tmpfs, so it never outlives a
-# boot. Falls back to wall-clock seconds without /proc/uptime. VS_FAKE_NOW
-# overrides it (tests only).
-vs_now() {
-    local uptime
-
+# vs_now_var - set VS_NOW to seconds since boot, which keeps increasing when the
+# robot syncs its clock after boot. Runtime state lives in tmpfs, so it never
+# outlives a boot. Falls back to wall-clock seconds without /proc/uptime.
+# VS_FAKE_NOW overrides it (tests only).
+vs_now_var() {
     if [ -n "${VS_FAKE_NOW:-}" ]; then
-        echo "$VS_FAKE_NOW"
+        VS_NOW="$VS_FAKE_NOW"
     elif [ -r "$VS_UPTIME_FILE" ]; then
-        read -r uptime _ < "$VS_UPTIME_FILE"
-        echo "${uptime%%.*}"
+        read -r VS_NOW _ < "$VS_UPTIME_FILE"
+        VS_NOW="${VS_NOW%%.*}"
     else
-        date +%s
+        VS_NOW=$(date +%s)
     fi
+}
+
+# vs_now - print the time from vs_now_var.
+vs_now() {
+    vs_now_var
+    echo "$VS_NOW"
 }
 
 vs_running() {
@@ -191,15 +305,55 @@ vs_stop() {
     return 0
 }
 
+# vs_tcp_port_state PORT - set VS_PORT_LISTENING and VS_PORT_CONNECTED to "yes"
+# or "no" for a local IPv4 TCP port. Reads /proc/net/tcp with builtins, and
+# falls back to netstat where that file is not available.
+vs_tcp_port_state() {
+    local hex idx local_address remote state rest
+
+    VS_PORT_LISTENING=no
+    VS_PORT_CONNECTED=no
+
+    if [ -r "$VS_PROC_NET_TCP" ]; then
+        eval "hex=\${VS_PORT_HEX_$1:-}"
+
+        if [ -z "$hex" ]; then
+            hex=$(printf '%04X' "$1")
+            eval "VS_PORT_HEX_$1=\$hex"
+        fi
+
+        while read -r idx local_address remote state rest; do
+            [ "${local_address##*:}" = "$hex" ] || continue
+
+            case "$state" in
+                0A) VS_PORT_LISTENING=yes ;;
+                01) VS_PORT_CONNECTED=yes ;;
+            esac
+        done < "$VS_PROC_NET_TCP"
+
+        return 0
+    fi
+
+    if netstat -ltn 2>/dev/null | awk -v port=":$1" '$4 ~ port "$" && $6 == "LISTEN" { found = 1 } END { exit !found }'; then
+        VS_PORT_LISTENING=yes
+    fi
+
+    if netstat -tn 2>/dev/null | awk -v port=":$1" '$4 ~ port "$" && $6 == "ESTABLISHED" { found = 1 } END { exit !found }'; then
+        VS_PORT_CONNECTED=yes
+    fi
+}
+
 # vs_port_listening PORT - succeed when something listens on TCP PORT.
 vs_port_listening() {
-    netstat -ltn 2>/dev/null | awk -v port=":$1" '$4 ~ port "$" && $6 == "LISTEN" { found = 1 } END { exit !found }'
+    vs_tcp_port_state "$1"
+    [ "$VS_PORT_LISTENING" = "yes" ]
 }
 
 # vs_port_connected PORT - succeed when a client is connected to a local
 # listener on TCP PORT.
 vs_port_connected() {
-    netstat -tn 2>/dev/null | awk -v port=":$1" '$4 ~ port "$" && $6 == "ESTABLISHED" { found = 1 } END { exit !found }'
+    vs_tcp_port_state "$1"
+    [ "$VS_PORT_CONNECTED" = "yes" ]
 }
 
 # vs_camera_paused - succeed while camera_ctl.sh has paused the camera.
@@ -224,21 +378,30 @@ vs_camera_bytes() {
     '
 }
 
+# vs_state_read NAME DEFAULT - set VS_VAL to a numeric runtime state value.
+vs_state_read() {
+    VS_VAL=""
+
+    if [ -r "$VS_RUN_DIR/$1" ]; then
+        read -r VS_VAL < "$VS_RUN_DIR/$1"
+    fi
+
+    case "$VS_VAL" in
+        "" | *[!0-9]*) VS_VAL="$2" ;;
+    esac
+}
+
 # vs_state_get NAME DEFAULT - print a numeric runtime state value.
 vs_state_get() {
-    local value=""
-
-    [ -r "$VS_RUN_DIR/$1" ] && value=$(cat "$VS_RUN_DIR/$1" 2>/dev/null)
-
-    case "$value" in
-        "" | *[!0-9]*) echo "$2" ;;
-        *) echo "$value" ;;
-    esac
+    vs_state_read "$1" "$2"
+    echo "$VS_VAL"
 }
 
 # vs_state_set NAME VALUE - store a runtime state value.
 vs_state_set() {
-    mkdir -p "$VS_RUN_DIR" && echo "$2" > "$VS_RUN_DIR/$1"
+    if ! { echo "$2" > "$VS_RUN_DIR/$1"; } 2>/dev/null; then
+        mkdir -p "$VS_RUN_DIR" && echo "$2" > "$VS_RUN_DIR/$1"
+    fi
 }
 
 # vs_backoff FAILURES - print seconds to wait before the next start attempt.
@@ -281,19 +444,24 @@ vs_start_detached() {
 }
 
 # vs_keep_running NAME LAUNCHER NOW - start NAME through LAUNCHER when it is not
-# running. Starts that do not last a minute back off progressively.
+# running. Starts that do not last a minute back off progressively. While NAME
+# runs, this starts only pidof.
 vs_keep_running() {
     local name="$1" launcher="$2" now="$3" failures problem
 
     if vs_running "$name"; then
-        if [ $((now - $(vs_state_get "${name}_started_at" 0))) -ge 60 ]; then
-            vs_state_set "${name}_failures" 0
+        vs_state_read "${name}_failures" 0
+
+        if [ "$VS_VAL" != 0 ]; then
+            vs_state_read "${name}_started_at" 0
+            [ $((now - VS_VAL)) -ge 60 ] && vs_state_set "${name}_failures" 0
         fi
 
         return 0
     fi
 
-    [ "$now" -ge "$(vs_state_get "${name}_next_try" 0)" ] || return 0
+    vs_state_read "${name}_next_try" 0
+    [ "$now" -ge "$VS_VAL" ] || return 0
 
     if ! problem=$("$launcher" --check 2>&1); then
         vs_log "supervisor: $name not started: $problem"
@@ -301,7 +469,8 @@ vs_keep_running() {
         return 0
     fi
 
-    failures=$(($(vs_state_get "${name}_failures" 0) + 1))
+    vs_state_read "${name}_failures" 0
+    failures=$((VS_VAL + 1))
     vs_log "supervisor: starting $name (attempt $failures)"
     vs_start_detached "$launcher"
     vs_state_set "${name}_failures" "$failures"
