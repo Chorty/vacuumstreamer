@@ -25,7 +25,13 @@ mkdir -p "$VS_RUN_DIR"
 
 # Serialize wakes so viewers arriving together start a single video_monitor
 (
-    flock -w "$timeout" 9 || exit 3
+    # BusyBox flock has no -w; poll the lock until the timeout
+    deadline=$(($(vs_now) + timeout))
+
+    until flock -n 9; do
+        [ "$(vs_now)" -lt "$deadline" ] || exit 3
+        sleep 0.2
+    done
 
     if ! vs_running video_monitor; then
         vs_log "camera wake: starting video_monitor"

@@ -13,6 +13,7 @@ VS_LOG="${VS_LOG:-/tmp/vacuumstreamer.log}"
 VS_RUN_DIR="${VS_RUN_DIR:-/tmp/vacuumstreamer}"
 VS_CAMERA_PORT="${VS_CAMERA_PORT:-6969}"
 VS_GO2RTC_API="${VS_GO2RTC_API:-http://127.0.0.1:1984}"
+VS_UPTIME_FILE="${VS_UPTIME_FILE:-/proc/uptime}"
 
 vs_log() {
     echo "$(date '+%Y-%m-%dT%H:%M:%S') $*" >> "$VS_LOG" 2>/dev/null
@@ -149,11 +150,18 @@ vs_camera_login_check() {
     fi
 }
 
-# vs_now - print the current time in seconds. VS_FAKE_NOW overrides it (tests
-# only).
+# vs_now - print seconds since boot, which keeps increasing when the robot syncs
+# its clock after boot. Runtime state lives in tmpfs, so it never outlives a
+# boot. Falls back to wall-clock seconds without /proc/uptime. VS_FAKE_NOW
+# overrides it (tests only).
 vs_now() {
+    local uptime
+
     if [ -n "${VS_FAKE_NOW:-}" ]; then
         echo "$VS_FAKE_NOW"
+    elif [ -r "$VS_UPTIME_FILE" ]; then
+        read -r uptime _ < "$VS_UPTIME_FILE"
+        echo "${uptime%%.*}"
     else
         date +%s
     fi

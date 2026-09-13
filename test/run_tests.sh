@@ -106,7 +106,24 @@ EOF
 #!/bin/sh
 cat "$VS_STATE/streams.json" 2>/dev/null
 EOF
-    printf '#!/bin/sh\nexit 0\n' > "$VS_DIR/bin/flock"
+    cat > "$VS_DIR/bin/flock" <<'EOF'
+#!/bin/sh
+# BusyBox 1.36 flock: only -s -x -u -n -o are valid
+nonblocking=no
+while [ $# -gt 1 ]; do
+    case "$1" in
+        -n) nonblocking=yes ;;
+        -s | -x | -u | -o) ;;
+        -*) echo "flock: invalid option -- '${1#-}'" >&2; exit 1 ;;
+    esac
+    shift
+done
+if [ -e "$VS_STATE/lock_held" ]; then
+    [ "$nonblocking" = yes ] && exit 1
+    while [ -e "$VS_STATE/lock_held" ]; do sleep 0.1; done
+fi
+exit 0
+EOF
     printf '#!/bin/sh\nexec "$@"\n' > "$VS_DIR/bin/setsid"
     chmod 755 "$VS_DIR/go2rtc" "$VS_DIR/video_monitor" "$VS_DIR/bin/"*
 
@@ -212,6 +229,11 @@ set_conf "CAMERA_IDLE_SECONDS=300" "CAMERA_STALL_SECONDS=abc" "CAMERA_WAKE_TIMEO
 check "a valid number is used" "300" "$(lib vs_number CAMERA_IDLE_SECONDS 180 30 86400)"
 check "a non-numeric value falls back" "20" "$(lib vs_number CAMERA_STALL_SECONDS 20 10 600)"
 check "an out-of-range value falls back" "15" "$(lib vs_number CAMERA_WAKE_TIMEOUT_SECONDS 15 1 120)"
+
+new_case
+printf '123.45 678.90\n' > "$VS_DIR/uptime"
+check "the clock counts seconds since boot" "123" "$(VS_UPTIME_FILE="$VS_DIR/uptime" lib vs_now)"
+check "the clock falls back to wall time without an uptime file" "yes" "$(n=$(VS_UPTIME_FILE="$VS_DIR/missing" lib vs_now); [ "$n" -gt 1700000000 ] && echo yes || echo no)"
 
 new_case
 check "camera mode defaults to on_demand" "on_demand" "$(lib vs_camera_mode)"
@@ -397,6 +419,24 @@ touch "$VS_STATE/never_listen"
 run_script "$VS_DIR/camera_wake.sh"
 check "wake: refused when video_monitor never listens" "1" "$STATUS"
 contains "wake: explains the timeout" "did not open port 6969 within 1s" "$OUT"
+
+new_case
+set_conf "CAMERA_WAKE_TIMEOUT_SECONDS=1"
+touch "$VS_STATE/lock_held"
+run_script "$VS_DIR/camera_wake.sh"
+check "wake: gives up when another wake holds the lock" "1" "$STATUS"
+contains "wake: explains the held lock" "timed out waiting for another camera wake" "$OUT"
+check "wake: starts nothing while another wake holds the lock" "no" "$(exists "$VS_STATE/running_video_monitor")"
+
+new_case
+set_conf "CAMERA_WAKE_TIMEOUT_SECONDS=5"
+touch "$VS_STATE/lock_held"
+( sleep 1; rm -f "$VS_STATE/lock_held" ) &
+OUT=$($TEST_SH "$VS_DIR/camera_wake.sh" 2>/dev/null)
+STATUS=$?
+wait
+check "wake: proceeds once the other wake releases the lock" "0" "$STATUS"
+check "wake: prints the address after waiting for the lock" "tcp://127.0.0.1:6969" "$OUT"
 
 # --- Supervisor ---
 
