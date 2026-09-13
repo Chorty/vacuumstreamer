@@ -306,10 +306,10 @@ vs_stop() {
 }
 
 # vs_tcp_port_state PORT - set VS_PORT_LISTENING and VS_PORT_CONNECTED to "yes"
-# or "no" for a local IPv4 TCP port. Reads /proc/net/tcp with builtins, and
-# falls back to netstat where that file is not available.
+# or "no" for a local TCP port. Reads /proc/net/tcp and /proc/net/tcp6 with
+# builtins, and falls back to netstat where /proc/net/tcp is not available.
 vs_tcp_port_state() {
-    local hex idx local_address remote state rest
+    local hex idx local_address remote state rest table
 
     VS_PORT_LISTENING=no
     VS_PORT_CONNECTED=no
@@ -322,14 +322,18 @@ vs_tcp_port_state() {
             eval "VS_PORT_HEX_$1=\$hex"
         fi
 
-        while read -r idx local_address remote state rest; do
-            [ "${local_address##*:}" = "$hex" ] || continue
+        for table in "$VS_PROC_NET_TCP" "${VS_PROC_NET_TCP}6"; do
+            [ -r "$table" ] || continue
 
-            case "$state" in
-                0A) VS_PORT_LISTENING=yes ;;
-                01) VS_PORT_CONNECTED=yes ;;
-            esac
-        done < "$VS_PROC_NET_TCP"
+            while read -r idx local_address remote state rest; do
+                [ "${local_address##*:}" = "$hex" ] || continue
+
+                case "$state" in
+                    0A) VS_PORT_LISTENING=yes ;;
+                    01) VS_PORT_CONNECTED=yes ;;
+                esac
+            done < "$table"
+        done
 
         return 0
     fi

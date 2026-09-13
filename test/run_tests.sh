@@ -296,6 +296,17 @@ EOF
 OUT=$(VS_PROC_NET_TCP="$VS_STATE/tcp" $TEST_SH -c '. "$VS_DIR/vacuumstreamer_lib.sh"; vs_tcp_port_state 6969; echo "$VS_PORT_LISTENING $VS_PORT_CONNECTED"')
 check "a client-side connection or another port is not the camera" "no no" "$OUT"
 
+new_case
+printf '  sl  local_address rem_address   st\n' > "$VS_STATE/tcp"
+cat > "$VS_STATE/tcp6" <<'EOF'
+  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000000000000:07C0 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 201
+   1: 00000000000000000000000000000000:1B39 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 202
+   2: 0000000000000000FFFF00000100007F:1B39 0000000000000000FFFF00000100007F:C350 01 00000000:00000000 00:00000000 00000000     0        0 203
+EOF
+OUT=$(VS_PROC_NET_TCP="$VS_STATE/tcp" $TEST_SH -c '. "$VS_DIR/vacuumstreamer_lib.sh"; vs_tcp_port_state 6969; a="$VS_PORT_LISTENING $VS_PORT_CONNECTED"; vs_tcp_port_state 1984; echo "$a / $VS_PORT_LISTENING $VS_PORT_CONNECTED"')
+check "IPv6 listeners and connections are read from /proc/net/tcp6" "yes yes / yes no" "$OUT"
+
 # --- Runtime state helpers ---
 
 new_case
