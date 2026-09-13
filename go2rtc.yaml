@@ -3,11 +3,18 @@ streams:
     - tcp://127.0.0.1:6969
     - "exec:arecord -D hw:0,0 -f S16_LE -r 16000 -c 1 -t wav#backchannel=/data/vacuumstreamer/play_pcm.sh"
 
+# Login is controlled by CAMERA_LOGIN in vacuumstreamer.conf. go2rtc_launch.sh
+# provides the credentials only when it is on; otherwise these resolve to empty
+# values and go2rtc does not ask for a login.
 api:
   listen: ":1984"
+  username: "${GO2RTC_USERNAME:}"
+  password: "${GO2RTC_PASSWORD:}"
 
 rtsp:
   listen: ":8554"
+  username: "${GO2RTC_USERNAME:}"
+  password: "${GO2RTC_PASSWORD:}"
 
 webrtc:
   candidates:
