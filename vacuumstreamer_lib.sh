@@ -171,8 +171,24 @@ vs_running() {
     pidof "$1" > /dev/null 2>&1
 }
 
+# vs_stop NAME - ask NAME to exit, and kill it when it is still running after
+# VS_STOP_GRACE_SECONDS (default 3), for example because it is hung.
 vs_stop() {
-    killall "$1" > /dev/null 2>&1
+    local waited=0 grace="${VS_STOP_GRACE_SECONDS:-3}"
+
+    killall "$1" > /dev/null 2>&1 || return 0
+
+    while vs_running "$1" && [ "$waited" -lt $((grace * 5)) ]; do
+        sleep 0.2
+        waited=$((waited + 1))
+    done
+
+    if vs_running "$1"; then
+        vs_log "$1 did not exit within ${grace}s; killing it"
+        killall -KILL "$1" > /dev/null 2>&1
+    fi
+
+    return 0
 }
 
 # vs_port_listening PORT - succeed when something listens on TCP PORT.

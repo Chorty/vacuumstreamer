@@ -89,7 +89,13 @@ EOF
 EOF
     cat > "$VS_DIR/bin/killall" <<'EOF'
 #!/bin/sh
+# BusyBox killall: optional -SIGNAL, fails when no process has the name
 echo "killall $*" >> "$VS_STATE/calls"
+signal=TERM
+case "$1" in -*) signal="${1#-}"; shift ;; esac
+[ -e "$VS_STATE/running_$1" ] || exit 1
+# A hung process ignores TERM
+[ "$signal" = TERM ] && [ -e "$VS_STATE/hung_$1" ] && exit 0
 rm -f "$VS_STATE/running_$1"
 [ "$1" = video_monitor ] && rm -f "$VS_STATE/listening"
 exit 0
@@ -241,6 +247,27 @@ set_conf "CAMERA_MODE=always"
 check "camera mode can be always" "always" "$(lib vs_camera_mode)"
 set_conf "CAMERA_MODE=sometimes"
 check "an invalid camera mode falls back to on_demand" "on_demand" "$(lib vs_camera_mode)"
+
+# --- Stopping processes ---
+
+new_case
+touch "$VS_STATE/running_video_monitor"
+lib vs_stop video_monitor
+check "stop ends a process that exits" "no" "$(exists "$VS_STATE/running_video_monitor")"
+lacks "stop does not kill a process that exits" "killall -KILL" "$(calls)"
+
+new_case
+touch "$VS_STATE/running_video_monitor" "$VS_STATE/hung_video_monitor"
+VS_STOP_GRACE_SECONDS=1 lib vs_stop video_monitor
+contains "stop kills a hung process after the grace period" "killall -KILL video_monitor" "$(calls)"
+check "a hung process is gone after stop" "no" "$(exists "$VS_STATE/running_video_monitor")"
+contains "killing a hung process is logged" "video_monitor did not exit within 1s; killing it" "$(cat "$VS_LOG")"
+
+new_case
+lib vs_stop video_monitor
+STATUS=$?
+check "stopping a process that is not running succeeds" "0" "$STATUS"
+lacks "stopping a process that is not running does not kill" "killall -KILL" "$(calls)"
 
 # --- go2rtc stream info ---
 
@@ -527,6 +554,15 @@ set_run_state camera_bytes 5000
 set_run_state camera_bytes_since 970
 supervise 1000
 contains "stall: video_monitor restarts when no video arrives" "killall video_monitor" "$(calls)"
+
+new_case
+touch "$VS_STATE/running_go2rtc" "$VS_STATE/running_video_monitor" "$VS_STATE/listening" "$VS_STATE/connected" "$VS_STATE/hung_video_monitor"
+printf '{\n  "producers": [\n    {\n      "bytes_recv": 5000\n    }\n  ],\n  "consumers": []\n}\n' > "$VS_STATE/streams.json"
+set_run_state camera_bytes 5000
+set_run_state camera_bytes_since 970
+VS_STOP_GRACE_SECONDS=1 supervise 1000
+contains "stall: a hung video_monitor is killed" "killall -KILL video_monitor" "$(calls)"
+check "stall: the hung video_monitor is gone" "no" "$(exists "$VS_STATE/running_video_monitor")"
 
 new_case
 touch "$VS_STATE/running_go2rtc" "$VS_STATE/running_video_monitor" "$VS_STATE/listening" "$VS_STATE/connected"
