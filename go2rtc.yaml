@@ -1,6 +1,7 @@
 streams:
   vacuum:
-    - tcp://127.0.0.1:6969
+    # Starts video_monitor when a viewer connects, then returns tcp://127.0.0.1:6969
+    - echo:/data/vacuumstreamer/camera_wake.sh
     - "exec:arecord -D hw:0,0 -f S16_LE -r 16000 -c 1 -t wav#backchannel=/data/vacuumstreamer/play_pcm.sh"
 
 # Login is controlled by CAMERA_LOGIN in vacuumstreamer.conf. go2rtc_launch.sh

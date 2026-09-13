@@ -20,7 +20,7 @@ vs_http_bridge_loop() {
 camera=$(vs_switch CAMERA on)
 http_bridge=$(vs_switch HTTP_BRIDGE on)
 
-vs_log "boot: CAMERA=$camera CAMERA_LOGIN=$(vs_switch CAMERA_LOGIN off) TTS=$(vs_switch TTS on) MAP_MANAGEMENT=$(vs_switch MAP_MANAGEMENT on) HTTP_BRIDGE=$http_bridge"
+vs_log "boot: CAMERA=$camera CAMERA_MODE=$(vs_camera_mode) CAMERA_LOGIN=$(vs_switch CAMERA_LOGIN off) TTS=$(vs_switch TTS on) MAP_MANAGEMENT=$(vs_switch MAP_MANAGEMENT on) HTTP_BRIDGE=$http_bridge"
 
 vs_run mount --bind "$VS_DIR/ava_conf_video_monitor" /ava/conf/video_monitor
 vs_run mount --bind "$VS_DIR/mnt_private_copy" /mnt/private
@@ -35,13 +35,10 @@ vs_run amixer cset numid=16 on > /dev/null 2>&1      # LINEOUT switch on
 vs_run amixer cset numid=15 on > /dev/null 2>&1      # HpSpeaker switch on
 vs_run amixer cset numid=14 on > /dev/null 2>&1      # Headphone switch on
 
+# The supervisor starts go2rtc, and video_monitor when a viewer connects or
+# CAMERA_MODE=always
 if [ "$camera" = "on" ]; then
-    if problem=$("$VS_DIR/go2rtc_launch.sh" --check 2>&1); then
-        vs_background "$VS_DIR/video_monitor_launch.sh"
-        vs_background "$VS_DIR/go2rtc_launch.sh"
-    else
-        vs_log "camera not started: $problem"
-    fi
+    vs_background "$VS_DIR/camera_supervisor.sh"
 fi
 
 # TTS/HTTP bridge watchdog — respawns tcpsvd if it dies

@@ -10,6 +10,9 @@ VS_DIR="${VS_DIR:-/data/vacuumstreamer}"
 VS_CONF="${VS_CONF:-$VS_DIR/vacuumstreamer.conf}"
 VS_CREDENTIALS_DIR="${VS_CREDENTIALS_DIR:-$VS_DIR/credentials}"
 VS_LOG="${VS_LOG:-/tmp/vacuumstreamer.log}"
+VS_RUN_DIR="${VS_RUN_DIR:-/tmp/vacuumstreamer}"
+VS_CAMERA_PORT="${VS_CAMERA_PORT:-6969}"
+VS_GO2RTC_API="${VS_GO2RTC_API:-http://127.0.0.1:1984}"
 
 vs_log() {
     echo "$(date '+%Y-%m-%dT%H:%M:%S') $*" >> "$VS_LOG" 2>/dev/null
@@ -57,6 +60,43 @@ vs_switch() {
 # vs_enabled KEY DEFAULT - succeed when the switch is on.
 vs_enabled() {
     [ "$(vs_switch "$1" "$2")" = "on" ]
+}
+
+# vs_number KEY DEFAULT MIN MAX - print an integer setting between MIN and MAX.
+vs_number() {
+    local key="$1" default="$2" min="$3" max="$4" value
+
+    value=$(vs_conf_get "$key" "$default")
+
+    case "$value" in
+        "" | *[!0-9]*) ;;
+        *)
+            if [ "${#value}" -le 6 ] && [ "$value" -ge "$min" ] && [ "$value" -le "$max" ]; then
+                echo "$value"
+                return 0
+            fi
+            ;;
+    esac
+
+    vs_log "invalid value for $key in $VS_CONF; using $default"
+    echo "$default"
+}
+
+# vs_camera_mode - print "on_demand" or "always".
+vs_camera_mode() {
+    local value
+
+    value=$(vs_conf_get CAMERA_MODE on_demand)
+
+    case "$value" in
+        on_demand | always)
+            echo "$value"
+            ;;
+        *)
+            vs_log "invalid value for CAMERA_MODE in $VS_CONF; using on_demand"
+            echo "on_demand"
+            ;;
+    esac
 }
 
 # vs_private_path PATH - succeed when PATH is not a symlink and grants no
@@ -109,6 +149,84 @@ vs_camera_login_check() {
     fi
 }
 
+# vs_now - print the current time in seconds. VS_FAKE_NOW overrides it (tests
+# only).
+vs_now() {
+    if [ -n "${VS_FAKE_NOW:-}" ]; then
+        echo "$VS_FAKE_NOW"
+    else
+        date +%s
+    fi
+}
+
+vs_running() {
+    pidof "$1" > /dev/null 2>&1
+}
+
+vs_stop() {
+    killall "$1" > /dev/null 2>&1
+}
+
+# vs_port_listening PORT - succeed when something listens on TCP PORT.
+vs_port_listening() {
+    netstat -ltn 2>/dev/null | awk -v port=":$1" '$4 ~ port "$" && $6 == "LISTEN" { found = 1 } END { exit !found }'
+}
+
+# vs_port_connected PORT - succeed when a client is connected to a local
+# listener on TCP PORT.
+vs_port_connected() {
+    netstat -tn 2>/dev/null | awk -v port=":$1" '$4 ~ port "$" && $6 == "ESTABLISHED" { found = 1 } END { exit !found }'
+}
+
+# vs_camera_paused - succeed while camera_ctl.sh has paused the camera.
+vs_camera_paused() {
+    [ -e "$VS_RUN_DIR/camera_paused" ]
+}
+
+# vs_camera_bytes - print how many bytes go2rtc has received from the camera's
+# video source, or nothing while it is not connected. go2rtc pretty-prints the
+# stream with the video source as its first producer.
+vs_camera_bytes() {
+    curl -s -m 3 "$VS_GO2RTC_API/api/streams?src=vacuum" 2>/dev/null | awk '
+        /^  "producers": [[][]]/ { exit }
+        /^  "producers": [[]/ { in_producers = 1; next }
+        in_producers && (/^  []]/ || /^  "consumers"/) { exit }
+        in_producers && /^    [{]/ { producer++ }
+        in_producers && producer == 1 && /^      "bytes_recv": [0-9]+/ {
+            gsub(/[^0-9]/, "")
+            print
+            exit
+        }
+    '
+}
+
+# vs_state_get NAME DEFAULT - print a numeric runtime state value.
+vs_state_get() {
+    local value=""
+
+    [ -r "$VS_RUN_DIR/$1" ] && value=$(cat "$VS_RUN_DIR/$1" 2>/dev/null)
+
+    case "$value" in
+        "" | *[!0-9]*) echo "$2" ;;
+        *) echo "$value" ;;
+    esac
+}
+
+# vs_state_set NAME VALUE - store a runtime state value.
+vs_state_set() {
+    mkdir -p "$VS_RUN_DIR" && echo "$2" > "$VS_RUN_DIR/$1"
+}
+
+# vs_backoff FAILURES - print seconds to wait before the next start attempt.
+vs_backoff() {
+    case "$1" in
+        0 | 1) echo 5 ;;
+        2) echo 10 ;;
+        3) echo 30 ;;
+        *) echo 60 ;;
+    esac
+}
+
 # vs_run COMMAND... - run a command. With VS_DRY_RUN set to a file path (tests
 # only), record the command there instead.
 vs_run() {
@@ -129,4 +247,40 @@ vs_background() {
     fi
 
     "$@" > /dev/null 2>&1 &
+}
+
+# vs_start_detached COMMAND... - start a command in its own session with no
+# inherited output or lock descriptors, so it outlives the caller and never
+# holds the caller's pipe or locks open.
+vs_start_detached() {
+    setsid "$@" < /dev/null > /dev/null 2>&1 8>&- 9>&- &
+}
+
+# vs_keep_running NAME LAUNCHER NOW - start NAME through LAUNCHER when it is not
+# running. Starts that do not last a minute back off progressively.
+vs_keep_running() {
+    local name="$1" launcher="$2" now="$3" failures problem
+
+    if vs_running "$name"; then
+        if [ $((now - $(vs_state_get "${name}_started_at" 0))) -ge 60 ]; then
+            vs_state_set "${name}_failures" 0
+        fi
+
+        return 0
+    fi
+
+    [ "$now" -ge "$(vs_state_get "${name}_next_try" 0)" ] || return 0
+
+    if ! problem=$("$launcher" --check 2>&1); then
+        vs_log "supervisor: $name not started: $problem"
+        vs_state_set "${name}_next_try" $((now + 60))
+        return 0
+    fi
+
+    failures=$(($(vs_state_get "${name}_failures" 0) + 1))
+    vs_log "supervisor: starting $name (attempt $failures)"
+    vs_start_detached "$launcher"
+    vs_state_set "${name}_failures" "$failures"
+    vs_state_set "${name}_started_at" "$now"
+    vs_state_set "${name}_next_try" $((now + $(vs_backoff "$failures")))
 }
