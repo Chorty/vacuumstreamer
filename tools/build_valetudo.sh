@@ -36,7 +36,7 @@ step lint npm run lint_all
 step ts_check npm run ts-check_all
 step test npm test --workspace=backend
 step frontend npm run build --workspace=frontend
-BEFORE=$(wc -l < "$TOOL_LOG")
+BEFORE=$(wc -l < "$TOOL_LOG" | tr -d " ")
 step aarch64 npm run build_aarch64 --workspace=backend
 
 A="$C/build/aarch64/valetudo"
