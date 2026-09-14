@@ -10,13 +10,6 @@ VS_SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 
 [ -f "$VS_DIR/video_monitor" ] || exit 0
 
-vs_http_bridge_loop() {
-    while true; do
-        tcpsvd -vE 0.0.0.0 6971 "$VS_DIR/tts_handler.sh" > /dev/null 2>&1
-        sleep 2
-    done
-}
-
 camera=$(vs_switch CAMERA on)
 http_bridge=$(vs_switch HTTP_BRIDGE on)
 
@@ -41,7 +34,7 @@ if [ "$camera" = "on" ]; then
     vs_background "$VS_DIR/camera_supervisor.sh"
 fi
 
-# TTS/HTTP bridge watchdog — respawns tcpsvd if it dies
+# HTTP bridge on port 6971; http_bridge.sh restarts tcpsvd if it exits
 if [ "$http_bridge" = "on" ]; then
-    vs_background vs_http_bridge_loop
+    vs_background "$VS_DIR/http_bridge.sh"
 fi

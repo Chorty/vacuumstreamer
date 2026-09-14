@@ -19,11 +19,13 @@ trap 'rm -rf "$E"' EXIT
 git -C "$NATIVE_REPO" archive "$COMMIT" | tar -x -C "$E" || fail "export of $COMMIT failed"
 say "exported native commit $COMMIT"
 
-rsh_n "[ -e /data/_root_postboot.sh.predeploy_$DEPLOY ] || cp -p /data/_root_postboot.sh /data/_root_postboot.sh.predeploy_$DEPLOY
-       [ -e /data/vacuumstreamer/go2rtc.yaml.predeploy_$DEPLOY ] || cp -p /data/vacuumstreamer/go2rtc.yaml /data/vacuumstreamer/go2rtc.yaml.predeploy_$DEPLOY
-       [ -e /data/_root_postboot.sh.predeploy_$DEPLOY ] && [ -e /data/vacuumstreamer/go2rtc.yaml.predeploy_$DEPLOY ]" ||
-    fail "could not preserve the boot script and go2rtc.yaml"
-say "preserved _root_postboot.sh and go2rtc.yaml as .predeploy_$DEPLOY"
+PATHS=$(native_deployed_paths | tr '\n' ' ')
+rsh_n "for p in $PATHS; do
+           [ -e \"\$p\" ] || continue
+           [ -e \"\$p.predeploy_$DEPLOY\" ] || cp -p \"\$p\" \"\$p.predeploy_$DEPLOY\" || exit 1
+       done" ||
+    fail "could not preserve the files this deployment replaces"
+say "preserved existing files as .predeploy_$DEPLOY: $(rsh_n "ls $(native_deployed_paths | sed "s/\$/.predeploy_$DEPLOY/" | tr '\n' ' ') 2>/dev/null" | tr '\n' ' ')"
 
 install_file() { # SRC DEST MODE
     local src="$E/$1" dest="$2" mode="$3" want got
@@ -35,11 +37,10 @@ install_file() { # SRC DEST MODE
     say "installed $dest ($mode) $want"
 }
 
-SCRIPTS="vacuumstreamer_lib.sh go2rtc_launch.sh video_monitor_launch.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh vacuumstreamer_boot.sh"
-for f in $SCRIPTS; do
+for f in $NATIVE_SCRIPTS; do
     install_file "$f" "/data/vacuumstreamer/$f" 755
 done
-for f in $SCRIPTS; do
+for f in $NATIVE_SCRIPTS; do
     rsh_n "sh -n /data/vacuumstreamer/$f" || fail "robot syntax check failed for $f"
 done
 say "robot syntax check passed for all scripts"

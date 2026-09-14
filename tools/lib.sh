@@ -21,6 +21,21 @@ WORK_DIR="${WORK_DIR:-$HOME/.cache/vacuumstreamer-tools}"
 mkdir -p "$WORK_DIR"
 TOOL_LOG="$WORK_DIR/$(basename "$0" .sh).log"
 
+# Runtime scripts deploy_native.sh installs in /data/vacuumstreamer, in install
+# order: the boot script last, after everything it starts.
+NATIVE_SCRIPTS="vacuumstreamer_lib.sh go2rtc_launch.sh video_monitor_launch.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh http_bridge.sh tts_handler.sh vacuumstreamer_boot.sh"
+
+# native_deployed_paths - every robot file a native deployment may replace or
+# edit. Each existing one is preserved as <path>.predeploy_<id> and restored by
+# the reboot gate's rollback.
+native_deployed_paths() {
+    local f
+    for f in $NATIVE_SCRIPTS go2rtc.yaml vacuumstreamer.conf; do
+        echo "/data/vacuumstreamer/$f"
+    done
+    echo /data/_root_postboot.sh
+}
+
 say() {
     echo "$(date +%T) $*" | tee -a "$TOOL_LOG"
 }

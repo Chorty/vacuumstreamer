@@ -67,7 +67,7 @@ new_case() {
     VS_STATE="$VS_DIR/state"
     mkdir -p "$VS_DIR/bin" "$VS_STATE"
 
-    for script in vacuumstreamer_lib.sh go2rtc_launch.sh video_monitor_launch.sh vacuumstreamer_boot.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh; do
+    for script in vacuumstreamer_lib.sh go2rtc_launch.sh video_monitor_launch.sh vacuumstreamer_boot.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh http_bridge.sh tts_handler.sh; do
         cp "$REPO/$script" "$VS_DIR/$script"
         chmod 755 "$VS_DIR/$script"
     done
@@ -749,6 +749,70 @@ new_case
 run_script "$VS_DIR/camera_ctl.sh" restart
 check "ctl: an unknown action is a usage error" "64" "$STATUS"
 
+# --- HTTP bridge ---
+
+# bridge_request ADDRESS PATH - send one GET through tts_handler.sh as if
+# tcpsvd accepted it from ADDRESS; prints the status line
+bridge_request() {
+    printf 'GET %s HTTP/1.0\r\n\r\n' "$2" | TCPREMOTEADDR="$1" $TEST_SH "$VS_DIR/tts_handler.sh" 2>/dev/null | head -n 1 | tr -d '\r'
+}
+
+stub_tcpsvd() {
+    printf '#!/bin/sh\necho "tcpsvd $*" >> "$VS_STATE/calls"\n' > "$VS_DIR/bin/tcpsvd"
+    chmod 755 "$VS_DIR/bin/tcpsvd"
+}
+
+new_case
+check "bridge address: IPv4 with port" "192.168.1.106" "$(lib vs_bridge_client_ip 192.168.1.106:41000)"
+check "bridge address: bracketed IPv6" "fe80::1" "$(lib vs_bridge_client_ip '[fe80::1]:41000')"
+check "bridge address: IPv4-mapped IPv6" "192.168.1.106" "$(lib vs_bridge_client_ip '[::ffff:192.168.1.106]:41000')"
+check "bridge address: none" "" "$(lib vs_bridge_client_ip '')"
+
+new_case
+check "bridge: without HTTP_BRIDGE_ALLOW every client is served" "HTTP/1.0 404 Not Found" "$(bridge_request 192.168.1.50:41000 /nope)"
+
+new_case
+set_conf "HTTP_BRIDGE_ALLOW=192.168.1.106"
+check "bridge: an allowed client is served" "HTTP/1.0 404 Not Found" "$(bridge_request 192.168.1.106:41000 /nope)"
+check "bridge: another client is refused" "HTTP/1.0 403 Forbidden" "$(bridge_request 192.168.1.50:41000 /nope)"
+check "bridge: the refused address is recorded" "192.168.1.50" "$(cat "$VS_RUN_DIR/bridge_denied_last" 2>/dev/null)"
+check "bridge: an address prefix is not a match" "HTTP/1.0 403 Forbidden" "$(bridge_request 192.168.1.10:41000 /nope)"
+check "bridge: the robot itself is always served" "HTTP/1.0 404 Not Found" "$(bridge_request 127.0.0.1:41000 /nope)"
+check "bridge: an IPv4-mapped allowed client is served" "HTTP/1.0 404 Not Found" "$(bridge_request '[::ffff:192.168.1.106]:41000' /nope)"
+check "bridge: a missing client address is refused" "HTTP/1.0 403 Forbidden" "$(bridge_request '' /nope)"
+
+new_case
+set_conf "HTTP_BRIDGE_ALLOW=192.168.1.5, 192.168.1.106"
+check "bridge: a comma-separated list is honored" "HTTP/1.0 404 Not Found" "$(bridge_request 192.168.1.106:41000 /nope)"
+
+new_case
+set_conf "HTTP_BRIDGE_ALLOW=any"
+check "bridge: any allows every client" "HTTP/1.0 404 Not Found" "$(bridge_request 192.168.1.50:41000 /nope)"
+
+new_case
+set_conf "HTTP_BRIDGE_ALLOW=192.168.1.106"
+printf '#!/bin/sh\ntouch "$VS_STATE/curl_called"\n' > "$VS_DIR/bin/curl"
+bridge_request 192.168.1.50:41000 /start > /dev/null
+check "bridge: a refused client cannot send commands" "no" "$(exists "$VS_STATE/curl_called")"
+bridge_request 192.168.1.106:41000 /start > /dev/null
+check "bridge: an allowed client can send commands" "yes" "$(exists "$VS_STATE/curl_called")"
+
+new_case
+stub_tcpsvd
+export VS_BRIDGE_ONCE=1
+run_script "$VS_DIR/http_bridge.sh"
+contains "bridge loop: tcpsvd runs the handler with the client address" "tcpsvd -v 0.0.0.0 6971 $VS_DIR/tts_handler.sh" "$(calls)"
+lacks "bridge loop: tcpsvd keeps its environment" "-vE" "$(calls)"
+contains "bridge loop: logs the allow list" "http bridge: started on port 6971 (HTTP_BRIDGE_ALLOW=any)" "$(cat "$VS_LOG")"
+
+new_case
+stub_tcpsvd
+touch "$VS_STATE/lock_held"
+run_script "$VS_DIR/http_bridge.sh"
+check "bridge loop: a second instance exits" "0" "$STATUS"
+lacks "bridge loop: a second instance does not start tcpsvd" "tcpsvd" "$(calls)"
+unset VS_BRIDGE_ONCE
+
 # --- Boot script ---
 
 new_case
@@ -758,7 +822,7 @@ contains "boot mounts the private copy" "run: mount --bind $VS_DIR/mnt_private_c
 contains "boot sets the speaker mixer" "run: amixer cset numid=16 on" "$ACTIONS"
 contains "boot starts the camera supervisor" "background: $VS_DIR/camera_supervisor.sh" "$ACTIONS"
 lacks "boot leaves video_monitor to the supervisor" "video_monitor_launch" "$ACTIONS"
-contains "boot starts the HTTP bridge" "background: vs_http_bridge_loop" "$ACTIONS"
+contains "boot starts the HTTP bridge" "background: $VS_DIR/http_bridge.sh" "$ACTIONS"
 contains "boot logs the switches" "boot: CAMERA=on CAMERA_MODE=on_demand CAMERA_LOGIN=off TTS=on MAP_MANAGEMENT=on HTTP_BRIDGE=on" "$(cat "$VS_LOG")"
 
 new_case
@@ -766,12 +830,12 @@ set_conf "CAMERA=off"
 ACTIONS=$(boot_actions)
 lacks "camera off: boot does not start the supervisor" "camera_supervisor" "$ACTIONS"
 contains "camera off: mounts still apply" "run: mount --bind" "$ACTIONS"
-contains "camera off: the HTTP bridge still starts" "background: vs_http_bridge_loop" "$ACTIONS"
+contains "camera off: the HTTP bridge still starts" "background: $VS_DIR/http_bridge.sh" "$ACTIONS"
 
 new_case
 set_conf "HTTP_BRIDGE=off"
 ACTIONS=$(boot_actions)
-lacks "bridge off: boot does not start the bridge" "vs_http_bridge_loop" "$ACTIONS"
+lacks "bridge off: boot does not start the bridge" "http_bridge" "$ACTIONS"
 contains "bridge off: the camera supervisor still starts" "background: $VS_DIR/camera_supervisor.sh" "$ACTIONS"
 
 new_case

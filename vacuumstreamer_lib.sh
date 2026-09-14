@@ -447,6 +447,45 @@ vs_start_detached() {
     setsid "$@" < /dev/null > /dev/null 2>&1 8>&- 9>&- &
 }
 
+# vs_bridge_client_ip ADDRESS - print the IP from tcpsvd's TCPREMOTEADDR, which
+# is "ip:port" or "[ip]:port". An IPv4-mapped IPv6 address prints as IPv4.
+vs_bridge_client_ip() {
+    local addr="$1"
+
+    case "$addr" in
+        \[*\]:*)
+            addr="${addr#\[}"
+            addr="${addr%%\]:*}"
+            ;;
+        *:*:*) ;;
+        *:*) addr="${addr%:*}" ;;
+    esac
+
+    case "$addr" in
+        ::ffff:*.*.*.*) addr="${addr#::ffff:}" ;;
+    esac
+
+    echo "$addr"
+}
+
+# vs_bridge_client_allowed IP - succeed when IP may use the HTTP bridge. The
+# robot itself always may. HTTP_BRIDGE_ALLOW lists the other allowed addresses,
+# separated by spaces or commas; "any", the default, allows every client.
+vs_bridge_client_allowed() {
+    local ip="$1" entry
+
+    case "$ip" in
+        127.0.0.1 | ::1) return 0 ;;
+    esac
+
+    for entry in $(vs_conf_get HTTP_BRIDGE_ALLOW any | tr ',' ' '); do
+        [ "$entry" = any ] && return 0
+        [ -n "$ip" ] && [ "$entry" = "$ip" ] && return 0
+    done
+
+    return 1
+}
+
 # vs_keep_running NAME LAUNCHER NOW - start NAME through LAUNCHER when it is not
 # running. Starts that do not last a minute back off progressively. While NAME
 # runs, this starts only pidof.

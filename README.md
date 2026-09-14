@@ -134,7 +134,10 @@ Or append the vacuumstreamer block to your existing `_root_postboot.sh` — see 
 | `CAMERA_LOGIN` | `off` | A username and password for go2rtc's API and RTSP |
 | `TTS` | `on` | The Valetudo text-to-speech capability |
 | `MAP_MANAGEMENT` | `on` | The Valetudo floor management capability |
-| `HTTP_BRIDGE` | `on` | The port 6971 bridge (`tts_handler.sh`) |
+| `HTTP_BRIDGE` | `on` | The port 6971 bridge (`tts_handler.sh`, run by `http_bridge.sh`) |
+| `HTTP_BRIDGE_ALLOW` | `any` | Addresses allowed to use the bridge, separated by spaces or commas. The robot itself is always allowed; other clients get 403. Read on every request, so no reboot is needed |
+
+The bridge has no login, and it can start cleaning and drive the robot, so set `HTTP_BRIDGE_ALLOW` to your Home Assistant host. The most recently refused address is written to `/tmp/vacuumstreamer/bridge_denied_last`.
 
 The scripts parse the file without executing it and log to `/tmp/vacuumstreamer.log`. The bind mounts and mixer settings apply whichever features are on, so the AVA and audio environment stays the same.
 

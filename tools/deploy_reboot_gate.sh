@@ -38,7 +38,8 @@ new_healthy() {
     rsh_n '[ "$(curl -s -o /dev/null -m 4 -w "%{http_code}" http://127.0.0.1/)" = 200 ] &&
            [ "$(curl -s -o /dev/null -m 4 -w "%{http_code}" http://127.0.0.1/api/v2/robot)" = 200 ] &&
            pidof valetudo > /dev/null && ps w | grep -q "[v]aletudo_watchdog" &&
-           pidof go2rtc > /dev/null && ps w | grep -q "[c]amera_supervisor[.]sh" && pidof tcpsvd > /dev/null' 2>/dev/null
+           pidof go2rtc > /dev/null && ps w | grep -q "[c]amera_supervisor[.]sh" &&
+           ps w | grep -q "[h]ttp_bridge[.]sh" && pidof tcpsvd > /dev/null' 2>/dev/null
 }
 
 previous_healthy() {
@@ -73,9 +74,13 @@ if reboot_and_wait && gate new_healthy &&
     exit 0
 fi
 
-say "gate failed; rolling back the binary, boot script and go2rtc.yaml"
-rsh_n "cp -p /data/_root_postboot.sh.predeploy_$DEPLOY /data/_root_postboot.sh &&
-       cp -p /data/vacuumstreamer/go2rtc.yaml.predeploy_$DEPLOY /data/vacuumstreamer/go2rtc.yaml &&
+say "gate failed; rolling back the binary and every preserved native file"
+PATHS=$(native_deployed_paths | tr '\n' ' ')
+rsh_n "for p in $PATHS; do
+           if [ -e \"\$p.predeploy_$DEPLOY\" ]; then
+               cp -p \"\$p.predeploy_$DEPLOY\" \"\$p.rollback_tmp\" && mv -f \"\$p.rollback_tmp\" \"\$p\" || exit 1
+           fi
+       done
        cp -p /data/valetudo.predeploy_$DEPLOY /data/valetudo.rollback_tmp && mv -f /data/valetudo.rollback_tmp /data/valetudo && sync" ||
     fail "rollback copy failed; the robot needs manual attention"
 if reboot_and_wait && gate previous_healthy && [ "$(remote_sha256 /data/valetudo)" = "$PREVIOUS_SHA" ]; then
