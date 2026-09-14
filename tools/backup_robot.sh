@@ -34,6 +34,15 @@ tar -xzf "$A" -C "$V" 2>>"$TOOL_LOG" || fail "archive extraction failed (disk sp
 
 # Files without read permission (for example /data/valetudo.bak, mode 0111)
 # cannot be opened after extraction; verify them from the archive stream.
+# Firmware counters that are rewritten while the robot runs may legitimately
+# differ between the manifest and the archive; they must still be archived.
+VOLATILE="/mnt/misc/totalruntime"
+EMPTY_SHA256=$(printf '' | shasum -a 256 | cut -d' ' -f1)
+is_volatile() {
+    local v
+    for v in $VOLATILE; do [ "$1" = "$v" ] && return 0; done
+    return 1
+}
 not_ok=0
 while IFS= read -r line; do
     name="${line%%: *}"
@@ -41,6 +50,8 @@ while IFS= read -r line; do
     got=$(tar -xOzf "$A" "$name" 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
     if [ -n "$want" ] && [ "$got" = "$want" ]; then
         say "verified from archive stream: /$name"
+    elif [ -n "$got" ] && [ "$got" != "$EMPTY_SHA256" ] && is_volatile "/$name"; then
+        say "changed during backup (live counter, archived as read): /$name"
     else
         say "MISMATCH /$name"
         not_ok=$((not_ok + 1))
