@@ -31,6 +31,7 @@ say "source: parent $(git rev-parse HEAD) (HEAD file: $(cat .git/HEAD)), plugin 
 step pkg_cache rsync -a "$VALETUDO_REPO/build_dependencies/pkg/" build_dependencies/pkg/
 step npm_ci npm ci
 step openapi npm run build_openapi_schema
+step generate_code npm run generate_code --workspace=backend
 step lint npm run lint_all
 step ts_check npm run ts-check_all
 step test npm test --workspace=backend
@@ -58,7 +59,7 @@ if [ -n "$PKG" ]; then
         echo "Built: $(date '+%F %T %Z') by tools/build_valetudo.sh"
         echo "Source: clean clone detached at $COMMIT"
         echo "Plugin: $(git -C vacuumstreamer-plugin rev-parse HEAD)"
-        echo "Steps: npm ci; build_openapi_schema; lint_all; ts-check_all; backend tests; frontend build; build_aarch64"
+        echo "Steps: npm ci; build_openapi_schema; generate_code; lint_all; ts-check_all; backend tests; frontend build; build_aarch64"
         echo "Embedded metadata: $META"
         echo "Artifact SHA-256: $SHA"
         echo "Architecture: $(file -b "$A")"
