@@ -25,8 +25,12 @@ say "archive entries: $(tar -tzf "$A" | wc -l | tr -d ' ')"
 
 V=$(mktemp -d)
 trap 'rm -rf "$V"' EXIT
-tar -xzf "$A" -C "$V" 2>>"$TOOL_LOG"
+tar -xzf "$A" -C "$V" 2>>"$TOOL_LOG" || fail "archive extraction failed (disk space?)"
+: > "$WORK_DIR/robot_files.check" || fail "cannot write $WORK_DIR/robot_files.check"
+# shasum -c exits non-zero for unreadable files, which are re-checked below, so
+# judge completeness by the number of result lines instead of its exit status.
 (cd "$V" && sed 's#  /#  #' "$RB/robot_files.sha256" | shasum -a 256 -c 2>/dev/null) > "$WORK_DIR/robot_files.check"
+[ "$(wc -l < "$WORK_DIR/robot_files.check" | tr -d ' ')" = "$(wc -l < "$RB/robot_files.sha256" | tr -d ' ')" ] || fail "extraction check incomplete (disk space?)"
 
 # Files without read permission (for example /data/valetudo.bak, mode 0111)
 # cannot be opened after extraction; verify them from the archive stream.
