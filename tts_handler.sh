@@ -57,7 +57,9 @@
 #   POST /quirks          - Set a quirk: JSON body {"id":"...","value":"..."}
 #   GET  /quirk/ID        - Get a single quirk value by UUID
 #
-# Usage: tcpsvd -vE 0.0.0.0 6971 /data/vacuumstreamer/tts_handler.sh
+# Started per connection by http_bridge.sh. Only the robot itself and the
+# addresses in HTTP_BRIDGE_ALLOW (vacuumstreamer.conf) are served; everyone else
+# gets 403.
 
 FFMPEG="/data/vacuumstreamer/ffmpeg"
 VALETUDO="http://127.0.0.1"
@@ -79,6 +81,16 @@ while read -r HEADER; do
             ;;
     esac
 done
+
+# tcpsvd provides the client address as TCPREMOTEADDR (see http_bridge.sh)
+. "${0%/*}/vacuumstreamer_lib.sh"
+CLIENT_IP=$(vs_bridge_client_ip "${TCPREMOTEADDR:-}")
+if ! vs_bridge_client_allowed "$CLIENT_IP"; then
+    mkdir -p "$VS_RUN_DIR" 2>/dev/null
+    echo "${CLIENT_IP:-unknown}" > "$VS_RUN_DIR/bridge_denied_last" 2>/dev/null
+    printf 'HTTP/1.0 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 10\r\nConnection: close\r\n\r\nForbidden\n'
+    exit 0
+fi
 
 send_response() {
     CODE="$1"

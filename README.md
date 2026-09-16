@@ -89,7 +89,14 @@ Copy the runtime scripts and go2rtc config:
 scp -O go2rtc.yaml root@${VACUUM_IP}:/data/vacuumstreamer/go2rtc.yaml
 scp -O play_pcm.sh root@${VACUUM_IP}:/data/vacuumstreamer/play_pcm.sh
 scp -O tts_handler.sh root@${VACUUM_IP}:/data/vacuumstreamer/tts_handler.sh
-ssh root@${VACUUM_IP} "chmod +x /data/vacuumstreamer/play_pcm.sh /data/vacuumstreamer/tts_handler.sh"
+for f in vacuumstreamer_lib.sh vacuumstreamer_boot.sh go2rtc_launch.sh video_monitor_launch.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh; do
+    scp -O "$f" root@${VACUUM_IP}:/data/vacuumstreamer/"$f"
+done
+ssh root@${VACUUM_IP} "chmod +x /data/vacuumstreamer/*.sh"
+
+# Install the switches once; later deployments keep the robot's copy
+scp -O vacuumstreamer.conf root@${VACUUM_IP}:/tmp/vacuumstreamer.conf
+ssh root@${VACUUM_IP} "[ -f /data/vacuumstreamer/vacuumstreamer.conf ] || mv /tmp/vacuumstreamer.conf /data/vacuumstreamer/vacuumstreamer.conf"
 ```
 
 **Important:** Edit `go2rtc.yaml` and update the `candidates` IP address to match your vacuum's IP.
@@ -115,11 +122,78 @@ ssh root@${VACUUM_IP} "chmod +x /data/_root_postboot.sh"
 
 Or append the vacuumstreamer block to your existing `_root_postboot.sh` — see the file for the full contents including WiFi power management, Valetudo startup, ALSA mixer configuration, and service launches.
 
+## Runtime Switches
+
+`/data/vacuumstreamer/vacuumstreamer.conf` turns features on or off. Reboot the robot after changing it. A missing file, missing key or invalid value keeps the original behavior: everything on and the camera login off.
+
+| Switch | Default | Controls |
+|---|---|---|
+| `CAMERA` | `on` | The camera supervisor, go2rtc and `video_monitor`, plus the Valetudo video capability and its MQTT and Home Assistant entities |
+| `CAMERA_MODE` | `on_demand` | `on_demand` captures only while someone watches; `always` keeps `video_monitor` running |
+| `CAMERA_IDLE_SECONDS` | `180` | Seconds without a viewer before `on_demand` stops `video_monitor` (30–86400) |
+| `CAMERA_LOGIN` | `off` | A username and password for go2rtc's API and RTSP |
+| `TTS` | `on` | The Valetudo text-to-speech capability |
+| `MAP_MANAGEMENT` | `on` | The Valetudo floor management capability |
+| `HTTP_BRIDGE` | `on` | The port 6971 bridge (`tts_handler.sh`, run by `http_bridge.sh`) |
+| `HTTP_BRIDGE_ALLOW` | `any` | Addresses allowed to use the bridge, separated by spaces or commas. The robot itself is always allowed; other clients get 403. Read on every request, so no reboot is needed |
+
+The bridge has no login, and it can start cleaning and drive the robot, so set `HTTP_BRIDGE_ALLOW` to your Home Assistant host. The most recently refused address is written to `/tmp/vacuumstreamer/bridge_denied_last`.
+
+The scripts parse the file without executing it and log to `/tmp/vacuumstreamer.log`. The bind mounts and mixer settings apply whichever features are on, so the AVA and audio environment stays the same.
+
+Run the script tests with `sh test/run_tests.sh dash`.
+
+### Camera Modes and Supervision
+
+go2rtc runs whenever the camera is on, but its video source is `camera_wake.sh`. When a viewer connects, go2rtc runs that script, which starts `video_monitor`, waits up to `CAMERA_WAKE_TIMEOUT_SECONDS` (default 15) for its stream port and hands go2rtc the address. The first frame therefore takes a few seconds longer than with a running camera.
+
+`camera_supervisor.sh` starts at boot and checks every `CAMERA_SUPERVISE_SECONDS` (default 5). It:
+
+- restarts go2rtc if it exits, waiting 5, 10, 30 and then 60 seconds between starts that do not last a minute
+- in `on_demand` mode, stops `video_monitor` once no viewer has been connected for `CAMERA_IDLE_SECONDS`
+- in `always` mode, keeps `video_monitor` running with the same backoff
+- restarts `video_monitor` when a viewer is connected but go2rtc has received no video for `CAMERA_STALL_SECONDS` (default 20)
+
+If `video_monitor` exits while someone watches, go2rtc retries its source, which wakes `video_monitor` again. Switching the camera to `always` needs only `CAMERA_MODE=always` and a reboot.
+
+`camera_ctl.sh` is what Valetudo uses to start and stop the stream, and it works by hand too:
+
+- `camera_ctl.sh stop` pauses the camera: go2rtc and `video_monitor` stop and stay stopped, even if a viewer retries, until `camera_ctl.sh start` or a reboot
+- `camera_ctl.sh start` resumes the camera and wakes `video_monitor` immediately
+- `camera_ctl.sh status` prints the camera, mode, pause, process and viewer state
+
+Runtime state lives in `/tmp/vacuumstreamer`, so a reboot clears a pause.
+
+### Camera Login
+
+While `CAMERA_LOGIN=off`, anything on the network can use go2rtc's API. That includes `POST /api/config`, which rewrites go2rtc's configuration, and its restart endpoint. Turn the login on unless every device on the robot's network is trusted.
+
+go2rtc reads the credentials from files through its `CREDENTIALS_DIRECTORY` support, so they never appear in `go2rtc.yaml`, the environment or process arguments. Generate a password on your computer, for example with `openssl rand -hex 16`, and keep it in your password manager. Then, on the robot:
+
+```bash
+mkdir -p /data/vacuumstreamer/credentials
+chmod 700 /data/vacuumstreamer/credentials
+printf '%s\n' viewer > /data/vacuumstreamer/credentials/GO2RTC_USERNAME
+cat > /data/vacuumstreamer/credentials/GO2RTC_PASSWORD   # paste the password, press Enter, then Ctrl-D
+chmod 600 /data/vacuumstreamer/credentials/*
+sed -i 's/^CAMERA_LOGIN=.*/CAMERA_LOGIN=on/' /data/vacuumstreamer/vacuumstreamer.conf
+reboot
+```
+
+Both values may use only letters, digits, `.`, `_`, `~` and `-`, and the password needs at least 16 characters. If the credentials are missing, readable by other users or invalid, go2rtc and `video_monitor` are not started and the reason is written to `/tmp/vacuumstreamer.log`. Starting the stream from Valetudo is refused with the same reason.
+
+Requests from the robot itself are not challenged. Other clients authenticate as follows:
+
+- **RTSP:** `rtsp://viewer:PASSWORD@<VACUUM_IP>:8554/vacuum`
+- **API, still frames, HLS and the web UI:** HTTP basic auth, for example `http://viewer:PASSWORD@<VACUUM_IP>:1984/api/frame.jpeg?src=vacuum`
+
+Update Home Assistant's camera and WebRTC card URLs after turning the login on. Backups of `/data` contain the credentials.
+
 ## go2rtc Configuration
 
 The `go2rtc.yaml` configures:
 
-- **Video source** — TCP connection to `video_monitor` on port 6969
+- **Video source** — `camera_wake.sh`, which starts `video_monitor` on demand and returns its TCP stream on port 6969
 - **Audio source** — `arecord` capturing from the vacuum's microphone
 - **Backchannel** — `play_pcm.sh` receives WebRTC audio and plays through the speaker via `aplay`
 - **API** — Port 1984 (Web UI at `http://<VACUUM_IP>:1984`)

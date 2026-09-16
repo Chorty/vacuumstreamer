@@ -26,7 +26,10 @@ if [[ -f /data/valetudo ]]; then
         VALETUDO_CONFIG_PATH=/data/valetudo_config.json /data/maploader-binary > /dev/null 2>&1 &
 fi
 
-if [[ -f /data/vacuumstreamer/video_monitor ]]; then
+if [[ -x /data/vacuumstreamer/vacuumstreamer_boot.sh ]]; then
+    # Honors the runtime switches in /data/vacuumstreamer/vacuumstreamer.conf
+    /data/vacuumstreamer/vacuumstreamer_boot.sh
+elif [[ -f /data/vacuumstreamer/video_monitor ]]; then
     mount --bind /data/vacuumstreamer/ava_conf_video_monitor /ava/conf/video_monitor
     mount --bind /data/vacuumstreamer/mnt_private_copy /mnt/private
 
