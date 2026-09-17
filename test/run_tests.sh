@@ -132,6 +132,18 @@ fi
 exit 0
 EOF
     printf '#!/bin/sh\nexec "$@"\n' > "$VS_DIR/bin/setsid"
+    cat > "$VS_DIR/bin/nice" <<'STUB'
+#!/bin/sh
+# BusyBox 1.36 nice: only "-n ADJUST" is supported before the command
+if [ "$1" = "-n" ]; then
+    echo "$2" >> "$VS_STATE/nice_calls"
+    shift 2
+else
+    echo "nice: invalid option -- '$1'" >&2
+    exit 1
+fi
+exec "$@"
+STUB
     chmod 755 "$VS_DIR/go2rtc" "$VS_DIR/video_monitor" "$VS_DIR/bin/"*
 
     VS_CONF="$VS_DIR/vacuumstreamer.conf"
@@ -416,6 +428,10 @@ check "login off: go2rtc starts" "0" "$STATUS"
 check "login off: go2rtc gets its config and no credentials" "go2rtc args=[-c $VS_DIR/go2rtc.yaml] credentials=[unset] user=[unset]" "$OUT"
 
 new_case
+run_script "$VS_DIR/go2rtc_launch.sh"
+check "go2rtc runs at Valetudo's own nice level, not the default" "10" "$(cat "$VS_STATE/nice_calls" 2>/dev/null)"
+
+new_case
 OUT=$(GO2RTC_USERNAME=inherited CREDENTIALS_DIRECTORY=/elsewhere $TEST_SH "$VS_DIR/go2rtc_launch.sh" 2>&1)
 check "login off: inherited credential settings are cleared" "go2rtc args=[-c $VS_DIR/go2rtc.yaml] credentials=[unset] user=[unset]" "$OUT"
 
@@ -499,6 +515,10 @@ check "an unknown argument is a usage error" "64" "$STATUS"
 new_case
 run_script "$VS_DIR/video_monitor_launch.sh"
 check "video_monitor starts with the hook preloaded" "video_monitor preload=[$VS_DIR/vacuumstreamer.so]" "$OUT"
+
+new_case
+run_script "$VS_DIR/video_monitor_launch.sh"
+check "video_monitor runs at Valetudo's own nice level, not the default" "10" "$(cat "$VS_STATE/nice_calls" 2>/dev/null)"
 
 new_case
 : > "$VS_DIR/libc.so.6"
