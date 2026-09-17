@@ -164,6 +164,8 @@ If `video_monitor` exits while someone watches, go2rtc retries its source, which
 
 Runtime state lives in `/tmp/vacuumstreamer`, so a reboot clears a pause.
 
+go2rtc and `video_monitor` both start at nice 10 (`nice -n 10` in `go2rtc_launch.sh` and `video_monitor_launch.sh`), matching Valetudo's own self-imposed priority (`os.setPriority` in `Valetudo.js`) instead of the default nice 0 AVA runs at. On this SoC's 4 cores, a cleaning job alone can push load past 14-20; at that point scheduling order decides who gets the CPU, and video is best-effort, so it should never outrank Valetudo's API/GUI for it. Both still yield to AVA.
+
 ### Camera Login
 
 While `CAMERA_LOGIN=off`, anything on the network can use go2rtc's API. That includes `POST /api/config`, which rewrites go2rtc's configuration, and its restart endpoint. Turn the login on unless every device on the robot's network is trusted.

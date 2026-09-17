@@ -46,4 +46,11 @@ else
     vs_log "starting go2rtc without camera login"
 fi
 
-exec "$GO2RTC_BIN" -c "$GO2RTC_CONFIG"
+# Valetudo deliberately runs at nice 10 (os.setPriority in Valetudo.js) so the
+# API/GUI never competes with AVA's real-time control loop for CPU. go2rtc
+# and video_monitor previously ran at the default nice 0, tied with AVA and
+# ahead of Valetudo -- on this 4-core SoC, cleaning alone can push load past
+# 14-20, and at that point scheduling order decides who gets the CPU. Video
+# is best-effort; it should never outrank the API/GUI for it, so it matches
+# Valetudo's own nice level instead of the default.
+exec nice -n 10 "$GO2RTC_BIN" -c "$GO2RTC_CONFIG"
