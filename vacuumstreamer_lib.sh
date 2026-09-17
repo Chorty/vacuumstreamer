@@ -285,6 +285,37 @@ vs_running() {
     pidof "$1" > /dev/null 2>&1
 }
 
+# vs_nice_get - print this process's current niceness, portably: /proc on
+# the robot, `ps` as a fallback where /proc/self/stat is unavailable (used by
+# the Mac-side test suite).
+vs_nice_get() {
+    if [ -r /proc/self/stat ]; then
+        awk '{print $19}' /proc/self/stat
+    else
+        ps -o nice= -p $$ | tr -d "$VS_BLANKS"
+    fi
+}
+
+# vs_exec_at_nice TARGET CMD [ARGS...] - exec CMD at absolute niceness
+# TARGET, regardless of the caller's own current niceness. `nice -n ADJUST`
+# applies ADJUST relative to the caller, so a fixed adjustment lands
+# differently depending on what already niced this process -- for example
+# go2rtc, itself niced, spawning camera_wake.sh, which spawns
+# video_monitor_launch.sh. This computes the adjustment needed to reach
+# TARGET regardless of that chain.
+vs_exec_at_nice() {
+    local target="$1" current delta
+    shift
+    current=$(vs_nice_get) || current=0
+    delta=$((target - current))
+
+    if [ "$delta" -eq 0 ]; then
+        exec "$@"
+    else
+        exec nice -n "$delta" "$@"
+    fi
+}
+
 # vs_stop NAME - ask NAME to exit, and kill it when it is still running after
 # VS_STOP_GRACE_SECONDS (default 3), for example because it is hung.
 vs_stop() {

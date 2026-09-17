@@ -53,4 +53,4 @@ fi
 # 14-20, and at that point scheduling order decides who gets the CPU. Video
 # is best-effort; it should never outrank the API/GUI for it, so it matches
 # Valetudo's own nice level instead of the default.
-exec nice -n 10 "$GO2RTC_BIN" -c "$GO2RTC_CONFIG"
+vs_exec_at_nice 10 "$GO2RTC_BIN" -c "$GO2RTC_CONFIG"
