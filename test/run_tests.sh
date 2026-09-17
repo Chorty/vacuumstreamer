@@ -429,7 +429,7 @@ check "login off: go2rtc gets its config and no credentials" "go2rtc args=[-c $V
 
 new_case
 run_script "$VS_DIR/go2rtc_launch.sh"
-check "go2rtc runs at Valetudo's own nice level, not the default" "10" "$(cat "$VS_STATE/nice_calls" 2>/dev/null)"
+check "go2rtc runs at Valetudo's own absolute nice level" "10" "$(($(cat "$VS_STATE/nice_calls" 2>/dev/null) + $(lib vs_nice_get)))"
 
 new_case
 OUT=$(GO2RTC_USERNAME=inherited CREDENTIALS_DIRECTORY=/elsewhere $TEST_SH "$VS_DIR/go2rtc_launch.sh" 2>&1)
@@ -518,7 +518,7 @@ check "video_monitor starts with the hook preloaded" "video_monitor preload=[$VS
 
 new_case
 run_script "$VS_DIR/video_monitor_launch.sh"
-check "video_monitor runs at Valetudo's own nice level, not the default" "10" "$(cat "$VS_STATE/nice_calls" 2>/dev/null)"
+check "video_monitor runs at Valetudo's own absolute nice level" "10" "$(($(cat "$VS_STATE/nice_calls" 2>/dev/null) + $(lib vs_nice_get)))"
 
 new_case
 : > "$VS_DIR/libc.so.6"

@@ -39,4 +39,4 @@ fi
 export LD_PRELOAD
 vs_log "starting video_monitor"
 # See go2rtc_launch.sh for why this matches Valetudo's own nice level.
-exec nice -n 10 "$VIDEO_MONITOR_BIN"
+vs_exec_at_nice 10 "$VIDEO_MONITOR_BIN"
