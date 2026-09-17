@@ -52,7 +52,8 @@ Each stage refuses to run until the previous one has passed. The deploy ID names
 ## Validation
 
 - `compare_profiles.py` and `docked_idle.py` are tested locally; `integration_local.sh` passed locally after parameterization.
-- The robot-facing scripts keep the commands that ran against the robot on 2026-09-13, but they have not been re-run against the robot since paths, commits and hashes became arguments. Read a script before using it for a deployment.
+- `build_valetudo.sh`, `backup_ssh.sh`, `backup_robot.sh`, `seal_package.sh` and `deploy_binary.sh` have run against the robot in their parameterized form, most recently for the 2026-09-16 `sync0916` deployment. `backup_hardware.sh`, `deploy_native.sh`, `deploy_reboot_gate.sh`, `camera_checks.sh` and `profiles.sh` keep the commands that ran on 2026-09-13 but were not part of that deployment. Read a script before using it for a deployment.
+- Source `lib.sh` only from bash: it locates helpers through `BASH_SOURCE`, which zsh does not set.
 
 ## Lessons built in
 
