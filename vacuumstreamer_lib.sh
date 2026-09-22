@@ -116,6 +116,24 @@ vs_trim() {
     VS_VAL="${VS_VAL%"${VS_VAL##*[!$VS_BLANKS]}"}"
 }
 
+# vs_strip_leading_zeros DIGITS - print DIGITS with any leading zeros removed
+# (down to a single "0" for an all-zero input), for a value about to be used
+# in shell arithmetic. Plain "$((...))" reads a leading-zero numeral such as
+# "017" as octal, and the "10#" radix prefix some shells accept to force
+# decimal is not supported by dash/BusyBox ash's arithmetic.
+vs_strip_leading_zeros() {
+    local value="$1"
+
+    while [ "${#value}" -gt 1 ]; do
+        case "$value" in
+            0*) value="${value#0}" ;;
+            *) break ;;
+        esac
+    done
+
+    echo "$value"
+}
+
 # vs_conf_load - read VS_CONF into VS_C_<KEY> variables, following the same
 # rules as vs_conf_get: "#" starts a comment, whitespace around keys and values
 # is ignored, and the last occurrence of a key wins. Values are never executed.

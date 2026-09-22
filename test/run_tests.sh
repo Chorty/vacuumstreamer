@@ -940,8 +940,9 @@ OUT=$($TEST_SH "$VS_DIR/mic_gain_ctl.sh" set 0)
 check "mic gain set 0%: maps to raw 0" '{"mic_volume":0,"raw":0}' "$OUT"
 
 new_case
-OUT=$($TEST_SH "$VS_DIR/mic_gain_ctl.sh" set 150)
-check "mic gain set above 100: clamped to the raw maximum" '{"mic_volume":100,"raw":31}' "$OUT"
+run_script "$VS_DIR/mic_gain_ctl.sh" set 150
+check "mic gain set above 100: rejected, not silently clamped" "65" "$STATUS"
+check "mic gain set above 100: nothing is applied on rejection" "no" "$(exists "$VS_STATE/amixer_5")"
 
 new_case
 run_script "$VS_DIR/mic_gain_ctl.sh" set notanumber
@@ -960,6 +961,22 @@ new_case
 run_script "$VS_DIR/mic_gain_ctl.sh" frobnicate
 check "mic gain: an unknown action is a usage error" "64" "$STATUS"
 
+# A leading zero makes plain shell arithmetic read a number as octal, so "08"
+# and "09" (not valid octal digits) crash it outright, and "017" is silently
+# misread as 15 instead of decimal seventeen. Both must be handled as
+# ordinary base-10 percentages.
+new_case
+OUT=$($TEST_SH "$VS_DIR/mic_gain_ctl.sh" set 017)
+check "mic gain set: a leading zero is read as decimal, not octal" '{"mic_volume":16,"raw":5}' "$OUT"
+
+new_case
+run_script "$VS_DIR/mic_gain_ctl.sh" set 08
+check "mic gain set: a leading zero followed by an invalid octal digit does not crash the script" "0" "$STATUS"
+
+new_case
+OUT=$($TEST_SH "$VS_DIR/mic_gain_ctl.sh" set 050)
+check "mic gain set: a zero-padded value maps on the decimal value, not the octal one" '{"mic_volume":48,"raw":15}' "$OUT"
+
 # --- Recorder (video encoder) quality control ---
 
 new_case
@@ -977,6 +994,17 @@ OUT=$($TEST_SH "$VS_DIR/recorder_quality_ctl.sh" get)
 check "recorder quality get: reads the low profile back" '{"profile":"low","width":864,"height":480,"framerate":15,"bitrate":600000}' "$OUT"
 
 new_case
+mkdir -p "$VS_DIR/ava_conf_video_monitor"
+{
+    echo "encoder_voutput_width = 640"
+    printf 'encoder_voutput_height = 480\r\n'
+    echo "encoder_voutput_framerate = garbled"
+    echo "encoder_voutput_bitrate = 05"
+} > "$VS_DIR/ava_conf_video_monitor/recorder.cfg"
+OUT=$($TEST_SH "$VS_DIR/recorder_quality_ctl.sh" get)
+check "recorder quality get: a CRLF line ending or a non-numeric value reads as 0, not malformed JSON" '{"profile":"high","width":640,"height":480,"framerate":0,"bitrate":5}' "$OUT"
+
+new_case
 set_recorder_cfg high
 OUT=$($TEST_SH "$VS_DIR/recorder_quality_ctl.sh" set low)
 check "recorder quality set low: reports the new profile" '{"profile":"low","width":864,"height":480,"framerate":15,"bitrate":600000}' "$OUT"
@@ -992,6 +1020,18 @@ check "recorder quality set while running: still reports the new profile" '{"pro
 wait_for "$VS_STATE/running_video_monitor"
 check "recorder quality set while running: video_monitor comes back up" "yes" "$(exists "$VS_STATE/running_video_monitor")"
 check "recorder quality set while running: restarts video_monitor at Valetudo's own absolute nice level, not the caller's" "10" "$(($(cat "$VS_STATE/nice_calls" 2>/dev/null) + $(lib vs_nice_get)))"
+
+# Without the camera.lock camera_wake.sh also uses, a viewer's reconnect (or,
+# in always mode, the supervisor's own periodic restart) could start a second
+# video_monitor concurrently with this one's restart.
+new_case
+set_conf "CAMERA_WAKE_TIMEOUT_SECONDS=1"
+set_recorder_cfg high
+touch "$VS_STATE/running_video_monitor" "$VS_STATE/lock_held"
+run_script "$VS_DIR/recorder_quality_ctl.sh" set low
+check "recorder quality set: recorder.cfg is written even while the camera lock is held elsewhere" "1" "$(grep -c '^encoder_voutput_bitrate = 600000' "$VS_DIR/ava_conf_video_monitor/recorder.cfg")"
+check "recorder quality set: does not restart video_monitor while the camera lock is held elsewhere" "no" "$(exists "$VS_STATE/nice_calls")"
+contains "recorder quality set: logs the lock timeout" "timed out waiting for the camera lock" "$(cat "$VS_LOG")"
 
 new_case
 set_recorder_cfg high
