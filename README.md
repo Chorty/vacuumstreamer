@@ -202,6 +202,27 @@ The `go2rtc.yaml` configures:
 - **RTSP** — Port 8554 (`rtsp://<VACUUM_IP>:8554/vacuum`)
 - **WebRTC** — Port 8555
 
+## Microphone gain and recorder quality (native CLI)
+
+`mic_gain_ctl.sh` and `recorder_quality_ctl.sh` are the native replacements for
+this bridge's `/mic_volume` and `/video_quality` endpoints below, used by the
+Valetudo plugin's `MicrophoneGainCapability` and `RecorderQualityCapability`.
+Unlike the bridge handler, `recorder_quality_ctl.sh` restarts `video_monitor`
+through `video_monitor_launch.sh` -- so it lands at Valetudo's own absolute
+nice level -- and only when it is already running.
+
+```sh
+./mic_gain_ctl.sh get              # {"mic_volume":61,"raw":19}
+./mic_gain_ctl.sh set 75           # {"mic_volume":74,"raw":23}
+
+./recorder_quality_ctl.sh get      # {"profile":"low","width":864,"height":480,"framerate":15,"bitrate":600000}
+./recorder_quality_ctl.sh set high # {"profile":"high","width":640,"height":480,"framerate":25,"bitrate":2000000}
+```
+
+The bridge endpoints remain for now, while Home Assistant is migrated onto
+the new capabilities; see the port 6971 retirement note in the project's
+`MEMORY.md`.
+
 ## TTS & Audio HTTP API
 
 The `tts_handler.sh` script runs via `tcpsvd` on port 6971 and provides:

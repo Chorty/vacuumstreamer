@@ -67,7 +67,7 @@ new_case() {
     VS_STATE="$VS_DIR/state"
     mkdir -p "$VS_DIR/bin" "$VS_STATE"
 
-    for script in vacuumstreamer_lib.sh go2rtc_launch.sh video_monitor_launch.sh vacuumstreamer_boot.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh http_bridge.sh tts_handler.sh; do
+    for script in vacuumstreamer_lib.sh go2rtc_launch.sh video_monitor_launch.sh vacuumstreamer_boot.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh http_bridge.sh tts_handler.sh mic_gain_ctl.sh recorder_quality_ctl.sh; do
         cp "$REPO/$script" "$VS_DIR/$script"
         chmod 755 "$VS_DIR/$script"
     done
@@ -131,6 +131,24 @@ if [ -e "$VS_STATE/lock_held" ]; then
 fi
 exit 0
 EOF
+    cat > "$VS_DIR/bin/amixer" <<'EOF'
+#!/bin/sh
+# Minimal amixer stub: each numid's value persists in $VS_STATE/amixer_N
+case "$1" in
+    cget)
+        numid="${2#numid=}"
+        val=$(cat "$VS_STATE/amixer_$numid" 2>/dev/null) || val=0
+        echo "; type=INTEGER,access=rw---R--,values=1,min=0,max=31,step=0"
+        echo ": values=$val"
+        ;;
+    cset)
+        numid="${2#numid=}"
+        echo "$3" > "$VS_STATE/amixer_$numid"
+        echo ": values=$3"
+        ;;
+esac
+exit 0
+EOF
     printf '#!/bin/sh\nexec "$@"\n' > "$VS_DIR/bin/setsid"
     cat > "$VS_DIR/bin/nice" <<'STUB'
 #!/bin/sh
@@ -171,6 +189,44 @@ set_credentials() {
     printf '%s\n' "$1" > "$VS_CREDENTIALS_DIR/GO2RTC_USERNAME"
     printf '%s\n' "$2" > "$VS_CREDENTIALS_DIR/GO2RTC_PASSWORD"
     chmod 600 "$VS_CREDENTIALS_DIR/GO2RTC_USERNAME" "$VS_CREDENTIALS_DIR/GO2RTC_PASSWORD"
+}
+
+# set_recorder_cfg [PROFILE] - write a two-camera recorder.cfg fixture with
+# camera 0 at the given profile's settings (default: high). Mirrors the
+# layout recorder_quality_ctl.sh edits: camera 0's block in the first 70
+# lines, a second camera's identically-named keys after it, untouched.
+set_recorder_cfg() {
+    local vw=640 vh=480 vf=25 vb=2000000
+
+    case "${1:-high}" in
+        low) vw=864; vh=480; vf=15; vb=600000 ;;
+    esac
+
+    mkdir -p "$VS_DIR/ava_conf_video_monitor"
+    {
+        echo "video_width = $vw"
+        echo "video_height = $vh"
+        echo "video_framerate = $vf"
+        echo "encoder_voutput_width = $vw"
+        echo "encoder_voutput_height = $vh"
+        echo "encoder_voutput_framerate = $vf"
+        echo "encoder_voutput_bitrate = $vb"
+        # Padding past line 70, so camera 1's identically-named keys below
+        # fall outside the range camera 0's edits are restricted to.
+        i=0
+        while [ "$i" -lt 70 ]; do
+            echo "# padding $i"
+            i=$((i + 1))
+        done
+        echo "# --- camera 1, must not change ---"
+        echo "video_width = 320"
+        echo "video_height = 240"
+        echo "video_framerate = 10"
+        echo "encoder_voutput_width = 320"
+        echo "encoder_voutput_height = 240"
+        echo "encoder_voutput_framerate = 10"
+        echo "encoder_voutput_bitrate = 300000"
+    } > "$VS_DIR/ava_conf_video_monitor/recorder.cfg"
 }
 
 stub_supervisor() {
@@ -862,6 +918,130 @@ new_case
 rm "$VS_DIR/video_monitor"
 ACTIONS=$(boot_actions)
 check "without video_monitor installed boot does nothing" "" "$ACTIONS"
+
+# --- Microphone gain control ---
+
+new_case
+OUT=$($TEST_SH "$VS_DIR/mic_gain_ctl.sh" get)
+check "mic gain get: no prior state reads as zero" '{"mic_volume":0,"raw":0}' "$OUT"
+
+new_case
+OUT=$($TEST_SH "$VS_DIR/mic_gain_ctl.sh" set 50)
+check "mic gain set 50%: maps to raw 15 (50*31/100, truncated)" '{"mic_volume":48,"raw":15}' "$OUT"
+check "mic gain set: applies to control 5" "15" "$(cat "$VS_STATE/amixer_5")"
+check "mic gain set: applies to control 6 as well" "15" "$(cat "$VS_STATE/amixer_6")"
+
+new_case
+OUT=$($TEST_SH "$VS_DIR/mic_gain_ctl.sh" set 100)
+check "mic gain set 100%: maps to the raw maximum, not an overflowing value" '{"mic_volume":100,"raw":31}' "$OUT"
+
+new_case
+OUT=$($TEST_SH "$VS_DIR/mic_gain_ctl.sh" set 0)
+check "mic gain set 0%: maps to raw 0" '{"mic_volume":0,"raw":0}' "$OUT"
+
+new_case
+run_script "$VS_DIR/mic_gain_ctl.sh" set 150
+check "mic gain set above 100: rejected, not silently clamped" "65" "$STATUS"
+check "mic gain set above 100: nothing is applied on rejection" "no" "$(exists "$VS_STATE/amixer_5")"
+
+new_case
+run_script "$VS_DIR/mic_gain_ctl.sh" set notanumber
+check "mic gain set: a non-numeric percentage is rejected" "65" "$STATUS"
+check "mic gain set: nothing is applied on rejection" "no" "$(exists "$VS_STATE/amixer_5")"
+
+new_case
+run_script "$VS_DIR/mic_gain_ctl.sh" set -5
+check "mic gain set: a negative percentage is rejected" "65" "$STATUS"
+
+new_case
+run_script "$VS_DIR/mic_gain_ctl.sh"
+check "mic gain: missing action is a usage error" "64" "$STATUS"
+
+new_case
+run_script "$VS_DIR/mic_gain_ctl.sh" frobnicate
+check "mic gain: an unknown action is a usage error" "64" "$STATUS"
+
+# A leading zero makes plain shell arithmetic read a number as octal, so "08"
+# and "09" (not valid octal digits) crash it outright, and "017" is silently
+# misread as 15 instead of decimal seventeen. Both must be handled as
+# ordinary base-10 percentages.
+new_case
+OUT=$($TEST_SH "$VS_DIR/mic_gain_ctl.sh" set 017)
+check "mic gain set: a leading zero is read as decimal, not octal" '{"mic_volume":16,"raw":5}' "$OUT"
+
+new_case
+run_script "$VS_DIR/mic_gain_ctl.sh" set 08
+check "mic gain set: a leading zero followed by an invalid octal digit does not crash the script" "0" "$STATUS"
+
+new_case
+OUT=$($TEST_SH "$VS_DIR/mic_gain_ctl.sh" set 050)
+check "mic gain set: a zero-padded value maps on the decimal value, not the octal one" '{"mic_volume":48,"raw":15}' "$OUT"
+
+# --- Recorder (video encoder) quality control ---
+
+new_case
+run_script "$VS_DIR/recorder_quality_ctl.sh" get
+check "recorder quality get: recorder.cfg missing is reported, not a crash" "66" "$STATUS"
+
+new_case
+set_recorder_cfg high
+OUT=$($TEST_SH "$VS_DIR/recorder_quality_ctl.sh" get)
+check "recorder quality get: reads the high profile back" '{"profile":"high","width":640,"height":480,"framerate":25,"bitrate":2000000}' "$OUT"
+
+new_case
+set_recorder_cfg low
+OUT=$($TEST_SH "$VS_DIR/recorder_quality_ctl.sh" get)
+check "recorder quality get: reads the low profile back" '{"profile":"low","width":864,"height":480,"framerate":15,"bitrate":600000}' "$OUT"
+
+new_case
+mkdir -p "$VS_DIR/ava_conf_video_monitor"
+{
+    echo "encoder_voutput_width = 640"
+    printf 'encoder_voutput_height = 480\r\n'
+    echo "encoder_voutput_framerate = garbled"
+    echo "encoder_voutput_bitrate = 05"
+} > "$VS_DIR/ava_conf_video_monitor/recorder.cfg"
+OUT=$($TEST_SH "$VS_DIR/recorder_quality_ctl.sh" get)
+check "recorder quality get: a CRLF line ending or a non-numeric value reads as 0, not malformed JSON" '{"profile":"high","width":640,"height":480,"framerate":0,"bitrate":5}' "$OUT"
+
+new_case
+set_recorder_cfg high
+OUT=$($TEST_SH "$VS_DIR/recorder_quality_ctl.sh" set low)
+check "recorder quality set low: reports the new profile" '{"profile":"low","width":864,"height":480,"framerate":15,"bitrate":600000}' "$OUT"
+check "recorder quality set: camera 0 bitrate is rewritten" "1" "$(grep -c '^encoder_voutput_bitrate = 600000' "$VS_DIR/ava_conf_video_monitor/recorder.cfg")"
+check "recorder quality set: camera 1's identically-named keys are untouched" "1" "$(grep -c '^encoder_voutput_bitrate = 300000' "$VS_DIR/ava_conf_video_monitor/recorder.cfg")"
+check "recorder quality set: video_monitor was not running, so it is not restarted" "no" "$(exists "$VS_STATE/nice_calls")"
+
+new_case
+set_recorder_cfg high
+touch "$VS_STATE/running_video_monitor"
+OUT=$($TEST_SH "$VS_DIR/recorder_quality_ctl.sh" set low)
+check "recorder quality set while running: still reports the new profile" '{"profile":"low","width":864,"height":480,"framerate":15,"bitrate":600000}' "$OUT"
+wait_for "$VS_STATE/running_video_monitor"
+check "recorder quality set while running: video_monitor comes back up" "yes" "$(exists "$VS_STATE/running_video_monitor")"
+check "recorder quality set while running: restarts video_monitor at Valetudo's own absolute nice level, not the caller's" "10" "$(($(cat "$VS_STATE/nice_calls" 2>/dev/null) + $(lib vs_nice_get)))"
+
+# Without the camera.lock camera_wake.sh also uses, a viewer's reconnect (or,
+# in always mode, the supervisor's own periodic restart) could start a second
+# video_monitor concurrently with this one's restart.
+new_case
+set_conf "CAMERA_WAKE_TIMEOUT_SECONDS=1"
+set_recorder_cfg high
+touch "$VS_STATE/running_video_monitor" "$VS_STATE/lock_held"
+run_script "$VS_DIR/recorder_quality_ctl.sh" set low
+check "recorder quality set: recorder.cfg is written even while the camera lock is held elsewhere" "1" "$(grep -c '^encoder_voutput_bitrate = 600000' "$VS_DIR/ava_conf_video_monitor/recorder.cfg")"
+check "recorder quality set: does not restart video_monitor while the camera lock is held elsewhere" "no" "$(exists "$VS_STATE/nice_calls")"
+contains "recorder quality set: logs the lock timeout" "timed out waiting for the camera lock" "$(cat "$VS_LOG")"
+
+new_case
+set_recorder_cfg high
+run_script "$VS_DIR/recorder_quality_ctl.sh" set ultra
+check "recorder quality set: an unsupported profile is rejected" "65" "$STATUS"
+check "recorder quality set: config is untouched on rejection" '{"profile":"high","width":640,"height":480,"framerate":25,"bitrate":2000000}' "$($TEST_SH "$VS_DIR/recorder_quality_ctl.sh" get)"
+
+new_case
+run_script "$VS_DIR/recorder_quality_ctl.sh"
+check "recorder quality: missing action is a usage error" "64" "$STATUS"
 
 printf '%s passed, %s failed (shell: %s)\n' "$PASS" "$FAIL" "$TEST_SH"
 [ "$FAIL" -eq 0 ]
