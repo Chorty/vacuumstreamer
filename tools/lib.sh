@@ -22,8 +22,11 @@ mkdir -p "$WORK_DIR"
 TOOL_LOG="$WORK_DIR/$(basename "$0" .sh).log"
 
 # Runtime scripts deploy_native.sh installs in /data/vacuumstreamer, in install
-# order: the boot script last, after everything it starts.
-NATIVE_SCRIPTS="vacuumstreamer_lib.sh go2rtc_launch.sh video_monitor_launch.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh http_bridge.sh tts_handler.sh vacuumstreamer_boot.sh"
+# order: the boot script last, after everything it starts. mic_gain_ctl.sh and
+# recorder_quality_ctl.sh are called by the Valetudo plugin's
+# MicrophoneGainCapability and RecorderQualityCapability; a script missing
+# from this list is never installed, and the capability then fails with ENOENT.
+NATIVE_SCRIPTS="vacuumstreamer_lib.sh go2rtc_launch.sh video_monitor_launch.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh mic_gain_ctl.sh recorder_quality_ctl.sh http_bridge.sh tts_handler.sh vacuumstreamer_boot.sh"
 
 # native_deployed_paths - every robot file a native deployment may replace or
 # edit. Each existing one is preserved as <path>.predeploy_<id> and restored by
