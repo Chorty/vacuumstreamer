@@ -34,17 +34,22 @@ reboot_and_wait() {
     return 1
 }
 
+# The HTTP bridge must be running exactly when vacuumstreamer.conf switches it
+# on (HTTP_BRIDGE, default on); with it off, nothing may listen for it.
 new_healthy() {
-    rsh_n '[ "$(curl -s -o /dev/null -m 4 -w "%{http_code}" http://127.0.0.1/)" = 200 ] &&
-           [ "$(curl -s -o /dev/null -m 4 -w "%{http_code}" http://127.0.0.1/api/v2/robot)" = 200 ] &&
+    valetudo_auth_config | rsh "$REMOTE_VCURL"'; . /data/vacuumstreamer/vacuumstreamer_lib.sh &&
+           [ "$(vcode /)" = 200 ] && [ "$(vcode /api/v2/robot)" = 200 ] &&
            pidof valetudo > /dev/null && ps w | grep -q "[v]aletudo_watchdog" &&
            pidof go2rtc > /dev/null && ps w | grep -q "[c]amera_supervisor[.]sh" &&
-           ps w | grep -q "[h]ttp_bridge[.]sh" && pidof tcpsvd > /dev/null' 2>/dev/null
+           if [ "$(vs_switch HTTP_BRIDGE on)" = on ]; then
+               ps w | grep -q "[h]ttp_bridge[.]sh" && pidof tcpsvd > /dev/null
+           else
+               ! pidof tcpsvd > /dev/null
+           fi' 2>/dev/null
 }
 
 previous_healthy() {
-    rsh_n '[ "$(curl -s -o /dev/null -m 4 -w "%{http_code}" http://127.0.0.1/)" = 200 ] &&
-           [ "$(curl -s -o /dev/null -m 4 -w "%{http_code}" http://127.0.0.1/api/v2/robot)" = 200 ] &&
+    valetudo_auth_config | rsh "$REMOTE_VCURL"'; [ "$(vcode /)" = 200 ] && [ "$(vcode /api/v2/robot)" = 200 ] &&
            pidof valetudo > /dev/null' 2>/dev/null
 }
 
@@ -65,8 +70,8 @@ gate() {
 
 if reboot_and_wait && gate new_healthy &&
    [ "$(remote_sha256 /data/valetudo)" = "$EXPECTED" ] &&
-   curl -s -m 5 "http://$VACUUM_IP/api/v2/valetudo/version" | grep -q "$COMMIT"; then
-    say "runtime version: $(curl -s -m 5 "http://$VACUUM_IP/api/v2/valetudo/version")"
+   vcurl -s -m 5 "http://$VACUUM_IP/api/v2/valetudo/version" | grep -q "$COMMIT"; then
+    say "runtime version: $(vcurl -s -m 5 "http://$VACUUM_IP/api/v2/valetudo/version")"
     say "boot log: $(rsh_n 'grep "boot:" /tmp/vacuumstreamer.log | tail -1')"
     say "camera: $(camera_status)"
     touch "$MARK.reboot_passed"

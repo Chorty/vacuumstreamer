@@ -16,8 +16,7 @@ MARK="$WORK_DIR/deploy_$DEPLOY"
 [ -f "$PKG/SHA256SUMS.txt" ] || fail "backup package $PKG is not sealed (tools/seal_package.sh)"
 [ -e "$MARK.binary_passed" ] && fail "deploy ID $DEPLOY already has a binary stage; use a new ID"
 robot_docked_idle || fail "robot is not docked with an idle dock"
-rsh_n '[ "$(curl -s -o /dev/null -m 4 -w "%{http_code}" http://127.0.0.1/)" = 200 ] &&
-       [ "$(curl -s -o /dev/null -m 4 -w "%{http_code}" http://127.0.0.1/api/v2/robot)" = 200 ]' ||
+valetudo_auth_config | rsh "$REMOTE_VCURL"'; [ "$(vcode /)" = 200 ] && [ "$(vcode /api/v2/robot)" = 200 ]' ||
     fail "Valetudo is not healthy"
 
 ACTIVE_SHA=$(remote_sha256 /data/valetudo)
