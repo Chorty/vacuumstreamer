@@ -706,7 +706,8 @@ case "$BASE_PATH" in
                 VW=864; VH=480; VF=15; VB=600000
                 ;;
             high)
-                VW=640; VH=480; VF=25; VB=2000000
+                # Native size only; see recorder_quality_ctl.sh
+                VW=864; VH=480; VF=15; VB=2000000
                 ;;
             *)
                 send_response "400 Bad Request" "invalid profile: $NEW_PROFILE (use: low, high)"

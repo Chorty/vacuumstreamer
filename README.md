@@ -16,7 +16,7 @@ Tested on: Dreame L10s Ultra (Allwinner MR813/sun50iw10, ARM64, Athena Linux).
 - **Vacuum controls** — Start/stop/pause/home, operation mode, fan speed, water usage
 - **Manual driving** — Remote-control the vacuum with adjustable speed (velocity slider)
 - **Room cleaning** — Clean specific rooms by segment ID
-- **Video quality switching** — Toggle between low (864×480/15fps/600kbps) and high (640×480/25fps/2Mbps) profiles
+- **Video quality switching** — Toggle between low (864×480/15fps/600kbps) and high (864×480/15fps/2Mbps) profiles; both keep the camera's native size, which is the only one the encoder handles
 - **Statistics & consumables** — Runtime stats, filter/brush/mop wear monitoring
 - **Feature controls** — DND mode, carpet mode, obstacle avoidance, obstacle images, child lock, auto-empty interval
 - **Quirk settings** — Carpet sensitivity, mop cleaning frequency, mop wash intensity, pre-wet mops, detergent, carpet-first mode
@@ -216,7 +216,7 @@ nice level -- and only when it is already running.
 ./mic_gain_ctl.sh set 75           # {"mic_volume":74,"raw":23}
 
 ./recorder_quality_ctl.sh get      # {"profile":"low","width":864,"height":480,"framerate":15,"bitrate":600000}
-./recorder_quality_ctl.sh set high # {"profile":"high","width":640,"height":480,"framerate":25,"bitrate":2000000}
+./recorder_quality_ctl.sh set high # {"profile":"high","width":864,"height":480,"framerate":15,"bitrate":2000000}
 ```
 
 The bridge endpoints remain for now, while Home Assistant is migrated onto
@@ -255,7 +255,7 @@ The `tts_handler.sh` script runs via `tcpsvd` on port 6971 and provides:
 | `/segments` | GET | List map segments (rooms) |
 | `/segments/clean` | POST | Clean rooms. Body: `{"segment_ids": ["1","2"], "iterations": 1}` |
 | `/video_quality` | GET | Get current video profile: `{"profile":"low","width":864,"height":480,"framerate":15,"bitrate":600000}` |
-| `/video_quality/PROFILE` | GET | Set video profile: `low` (864×480/15fps/600kbps) or `high` (640×480/25fps/2Mbps). Restarts video_monitor |
+| `/video_quality/PROFILE` | GET | Set video profile: `low` (864×480/15fps/600kbps) or `high` (864×480/15fps/2Mbps). Restarts video_monitor |
 | `/statistics` | GET | Get vacuum runtime statistics (area, time, count, total) |
 | `/consumables` | GET | Get consumable status (filter, brushes, mops, sensors) with remaining % |
 | `/dnd` | GET | Get Do Not Disturb mode state |
