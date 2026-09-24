@@ -927,9 +927,9 @@ check "mic gain get: no prior state reads as zero" '{"mic_volume":0,"raw":0}' "$
 
 new_case
 OUT=$($TEST_SH "$VS_DIR/mic_gain_ctl.sh" set 50)
-check "mic gain set 50%: maps to raw 15 (50*31/100, truncated)" '{"mic_volume":48,"raw":15}' "$OUT"
-check "mic gain set: applies to control 5" "15" "$(cat "$VS_STATE/amixer_5")"
-check "mic gain set: applies to control 6 as well" "15" "$(cat "$VS_STATE/amixer_6")"
+check "mic gain set 50%: maps to the nearest raw value, 16 (15.5 rounded)" '{"mic_volume":51,"raw":16}' "$OUT"
+check "mic gain set: applies to control 5" "16" "$(cat "$VS_STATE/amixer_5")"
+check "mic gain set: applies to control 6 as well" "16" "$(cat "$VS_STATE/amixer_6")"
 
 new_case
 OUT=$($TEST_SH "$VS_DIR/mic_gain_ctl.sh" set 100)
@@ -975,7 +975,23 @@ check "mic gain set: a leading zero followed by an invalid octal digit does not 
 
 new_case
 OUT=$($TEST_SH "$VS_DIR/mic_gain_ctl.sh" set 050)
-check "mic gain set: a zero-padded value maps on the decimal value, not the octal one" '{"mic_volume":48,"raw":15}' "$OUT"
+check "mic gain set: a zero-padded value maps on the decimal value, not the octal one" '{"mic_volume":51,"raw":16}' "$OUT"
+
+# GET truncates and SET rounds, so writing back the percentage GET reported
+# must leave every raw value unchanged. With truncation on both sides 30 of
+# the 32 values dropped a step per pass (a Home Assistant sync loop drained
+# the mic to 0 this way).
+new_case
+DRIFTED=""
+raw=0
+while [ "$raw" -le 31 ]; do
+    echo "$raw" > "$VS_STATE/amixer_5"
+    pct=$($TEST_SH "$VS_DIR/mic_gain_ctl.sh" get | sed 's/.*"mic_volume":\([0-9]*\).*/\1/')
+    $TEST_SH "$VS_DIR/mic_gain_ctl.sh" set "$pct" > /dev/null
+    [ "$(cat "$VS_STATE/amixer_5")" = "$raw" ] || DRIFTED="$DRIFTED $raw"
+    raw=$((raw + 1))
+done
+check "mic gain: get then set leaves every raw value 0-31 unchanged" "" "$DRIFTED"
 
 # --- Recorder (video encoder) quality control ---
 
