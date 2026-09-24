@@ -1062,5 +1062,22 @@ for script in mic_gain_ctl.sh recorder_quality_ctl.sh camera_ctl.sh; do
     esac
 done
 
+# --- Deployment stage markers ---
+
+# deploy_native.sh and deploy_reboot_gate.sh read markers that stage 1 writes.
+# Both stage-1 tools (deploy_binary.sh, and deploy_keep_binary.sh for a
+# native-only deployment) must write every one of them, and both must preserve
+# the active binary as the reboot gate's rollback copy.
+for marker in binary_passed previous_sha; do
+    for tool in deploy_binary.sh deploy_keep_binary.sh; do
+        check "stage markers: $tool writes .$marker" "yes" "$(grep -q "\"\$MARK\.$marker\"" "$REPO/tools/$tool" && echo yes || echo no)"
+    done
+done
+for tool in deploy_binary.sh deploy_keep_binary.sh; do
+    check "stage markers: $tool preserves /data/valetudo.predeploy_<id>" "yes" "$(grep -q 'cp -p /data/valetudo /data/valetudo.predeploy_\$DEPLOY' "$REPO/tools/$tool" && echo yes || echo no)"
+done
+check "stage markers: deploy_keep_binary.sh never writes /data/valetudo" "no" "$(grep -E '(mv|cat >|cp)[^|]* /data/valetudo( |$|\\|\x27|")' "$REPO/tools/deploy_keep_binary.sh" | grep -qv predeploy && echo yes || echo no)"
+check "stage markers: deploy_native.sh reads .binary_passed" "yes" "$(grep -q 'MARK.binary_passed' "$REPO/tools/deploy_native.sh" && echo yes || echo no)"
+
 printf '%s passed, %s failed (shell: %s)\n' "$PASS" "$FAIL" "$TEST_SH"
 [ "$FAIL" -eq 0 ]
