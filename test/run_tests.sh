@@ -1043,5 +1043,24 @@ new_case
 run_script "$VS_DIR/recorder_quality_ctl.sh"
 check "recorder quality: missing action is a usage error" "64" "$STATUS"
 
+# --- Deployment script list ---
+
+# tools/deploy_native.sh installs exactly the scripts in tools/lib.sh's
+# NATIVE_SCRIPTS. A runtime script missing from it is silently never
+# installed, so the Valetudo plugin capability that calls it fails on the
+# robot with ENOENT (this happened to mic_gain_ctl.sh and
+# recorder_quality_ctl.sh when they were added).
+DEPLOYED=$(sed -n 's/^NATIVE_SCRIPTS="\(.*\)"$/\1/p' "$REPO/tools/lib.sh")
+check "deploy list: NATIVE_SCRIPTS was found in tools/lib.sh" "yes" "$([ -n "$DEPLOYED" ] && echo yes || echo no)"
+for script in $DEPLOYED; do
+    check "deploy list: $script exists in the repository" "yes" "$(exists "$REPO/$script")"
+done
+for script in mic_gain_ctl.sh recorder_quality_ctl.sh camera_ctl.sh; do
+    case " $DEPLOYED " in
+        *" $script "*) check "deploy list: $script (called by the plugin) is installed" "yes" "yes" ;;
+        *) check "deploy list: $script (called by the plugin) is installed" "yes" "no" ;;
+    esac
+done
+
 printf '%s passed, %s failed (shell: %s)\n' "$PASS" "$FAIL" "$TEST_SH"
 [ "$FAIL" -eq 0 ]
