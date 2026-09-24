@@ -6,9 +6,15 @@
 #
 # GET prints {"mic_volume":PCT,"raw":RAW}: RAW is the ALSA control value
 # (numid 5, range 0-31) and PCT is RAW scaled to 0-100.
-# SET rejects a PERCENT outside 0-100, maps a valid one to 0-31, and applies
-# it to both mic controls (numid 5 and 6), mirroring the previous port-6971
-# /mic_volume handler this replaces (which instead clamped the value).
+# SET rejects a PERCENT outside 0-100, maps a valid one to the nearest of
+# 0-31, and applies it to both mic controls (numid 5 and 6), like the previous
+# port-6971 /mic_volume handler this replaces (which instead clamped the value
+# and truncated).
+#
+# GET truncates and SET rounds, so setting the percentage GET reported gives
+# back the same raw value for all 32 raw values. Truncating on both sides
+# lowered 30 of them by one step on every get-then-set, which is how a Home
+# Assistant sync loop drained the mic to 0.
 #
 # Exit codes: 64 usage, 65 invalid percentage
 
@@ -59,7 +65,7 @@ case "${1:-}" in
             exit 65
         fi
 
-        raw=$((pct * MIC_GAIN_RAW_MAX / 100))
+        raw=$(((pct * MIC_GAIN_RAW_MAX + 50) / 100))
 
         amixer cset numid=5 "$raw" > /dev/null 2>&1
         amixer cset numid=6 "$raw" > /dev/null 2>&1
