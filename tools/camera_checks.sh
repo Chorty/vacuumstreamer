@@ -57,12 +57,12 @@ t0=$(now_float); codec=$(probe)
 [ "$codec" = h264 ] && pass "cold wake: H.264 stream info after $(since "$t0")s" || bad "cold wake returned ${codec:-nothing}"
 
 say "--- pause and resume through Valetudo ---"
-code=$(curl -s -o /dev/null -w '%{http_code}' -m 40 -X PUT -H 'Content-Type: application/json' -d '{"action":"stop"}' "$API")
+code=$(vcurl -s -o /dev/null -w '%{http_code}' -m 40 -X PUT -H 'Content-Type: application/json' -d '{"action":"stop"}' "$API")
 [ "$code" = 200 ] && pass "pause returned 200" || bad "pause returned $code"
 sleep 6
 camera_status | grep -q "paused=yes" && pass "camera paused: $(camera_status)" || bad "camera not paused: $(camera_status)"
 [ -z "$(probe 8000000)" ] && pass "RTSP refused while paused" || bad "RTSP served while paused"
-code=$(curl -s -o /dev/null -w '%{http_code}' -m 40 -X PUT -H 'Content-Type: application/json' -d '{"action":"start"}' "$API")
+code=$(vcurl -s -o /dev/null -w '%{http_code}' -m 40 -X PUT -H 'Content-Type: application/json' -d '{"action":"start"}' "$API")
 [ "$code" = 200 ] && pass "resume returned 200" || bad "resume returned $code"
 [ "$(probe)" = h264 ] && pass "RTSP serves H.264 after resume" || bad "RTSP did not serve H.264 after resume"
 

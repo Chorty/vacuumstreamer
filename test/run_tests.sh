@@ -1114,5 +1114,55 @@ done
 check "stage markers: deploy_keep_binary.sh never writes /data/valetudo" "no" "$(grep -E '(mv|cat >|cp)[^|]* /data/valetudo( |$|\\|\x27|")' "$REPO/tools/deploy_keep_binary.sh" | grep -qv predeploy && echo yes || echo no)"
 check "stage markers: deploy_native.sh reads .binary_passed" "yes" "$(grep -q 'MARK.binary_passed' "$REPO/tools/deploy_native.sh" && echo yes || echo no)"
 
+# --- Deploy tools: Valetudo Basic Auth and the HTTP bridge switch ---
+
+# REMOTE_VCURL runs on the robot with the login on stdin. The login must reach
+# curl only on its stdin, never in its arguments (visible in ps).
+AUTH_T="$TMP_ROOT/authcurl"
+mkdir -p "$AUTH_T/bin"
+cat > "$AUTH_T/bin/curl" <<'STUB'
+#!/bin/sh
+echo "$*" >> "$AUTH_T_DIR/args"
+cat >> "$AUTH_T_DIR/stdin"
+echo 200
+STUB
+chmod 755 "$AUTH_T/bin/curl"
+REMOTE_VCURL_DEF=$(sed -n "s/^REMOTE_VCURL='\(.*\)'$/\1/p" "$REPO/tools/lib.sh")
+check "tools auth: REMOTE_VCURL is defined in tools/lib.sh" "yes" "$([ -n "$REMOTE_VCURL_DEF" ] && echo yes || echo no)"
+CODE=$(printf 'user = "admin:s3cretLogin"\n' | AUTH_T_DIR="$AUTH_T" PATH="$AUTH_T/bin:$PATH" $TEST_SH -c "$REMOTE_VCURL_DEF"'; vcode /api/v2/robot; vcode /')
+check "tools auth: vcode reports the HTTP status" "200
+200" "$CODE"
+check "tools auth: the login never appears in curl's arguments" "no" "$(grep -q s3cretLogin "$AUTH_T/args" && echo yes || echo no)"
+check "tools auth: curl reads the login as a config on stdin, for every call" "2" "$(grep -c 'user = "admin:s3cretLogin"' "$AUTH_T/stdin")"
+contains "tools auth: curl is told to read its config from stdin" "-K -" "$(cat "$AUTH_T/args")"
+
+# valetudo_auth_config reads the Mac keychain (stubbed here): nothing without
+# an entry, one curl config line with one, and a refusal for unsafe values.
+if command -v bash > /dev/null 2>&1; then
+    cat > "$AUTH_T/bin/security" <<'STUB'
+#!/bin/sh
+[ -f "$AUTH_T_DIR/entry" ] || exit 44
+if [ "$3" = "-w" ] || [ "$4" = "-w" ]; then sed -n 2p "$AUTH_T_DIR/entry"; else echo "    \"acct\"<blob>=\"$(sed -n 1p "$AUTH_T_DIR/entry")\""; fi
+STUB
+    chmod 755 "$AUTH_T/bin/security"
+    auth_config() {
+        AUTH_T_DIR="$AUTH_T" PATH="$AUTH_T/bin:$PATH" WORK_DIR="$AUTH_T/work" bash -c ". '$REPO/tools/lib.sh'; valetudo_auth_config" 2>/dev/null
+    }
+    check "tools auth: no keychain entry sends no login" "" "$(auth_config)"
+    printf 'admin\ns3cretLogin\n' > "$AUTH_T/entry"
+    check "tools auth: a keychain entry becomes one curl config line" 'user = "admin:s3cretLogin"' "$(auth_config)"
+    printf 'admin\nbad"quote\n' > "$AUTH_T/entry"
+    OUT=$(auth_config)
+    contains "tools auth: a login with unsafe characters is refused" "ABORT" "$OUT"
+    check "tools auth: a refused login is not printed" "no" "$(printf '%s' "$OUT" | grep -q 'bad"quote' && echo yes || echo no)"
+fi
+
+# No tool may call Valetudo's HTTP API without the login helpers.
+BARE=$(grep -n 'curl' "$REPO"/tools/*.sh | grep -E '127\.0\.0\.1/|VACUUM_IP/api' | grep -v -E 'vcurl|vcode|curl -K')
+check "tools auth: every Valetudo request goes through vcurl/vcode or curl -K" "" "$BARE"
+
+# The reboot gate must follow HTTP_BRIDGE instead of always requiring the bridge.
+check "reboot gate: requires the bridge only when HTTP_BRIDGE is on" "yes" "$(grep -q 'vs_switch HTTP_BRIDGE on' "$REPO/tools/deploy_reboot_gate.sh" && echo yes || echo no)"
+
 printf '%s passed, %s failed (shell: %s)\n' "$PASS" "$FAIL" "$TEST_SH"
 [ "$FAIL" -eq 0 ]

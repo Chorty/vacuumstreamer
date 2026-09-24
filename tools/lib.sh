@@ -9,6 +9,9 @@
 #   BACKUP_ROOT    backup packages (default: ~/Documents/ValetudoBackups)
 #   PROFILE_ROOT   profiler output (default: ~/Documents/ValetudoProfiles)
 #   WORK_DIR       logs, markers and build clones (default: ~/.cache/vacuumstreamer-tools)
+#   VALETUDO_AUTH_SERVICE  Mac keychain service holding the Valetudo Basic Auth
+#                  login (default: valetudo-basic-auth; account = username).
+#                  Without that entry the tools send no login.
 
 TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NATIVE_REPO="$(cd "$TOOLS_DIR/.." && pwd)"
@@ -38,6 +41,38 @@ native_deployed_paths() {
     done
     echo /data/_root_postboot.sh
 }
+
+VALETUDO_AUTH_SERVICE="${VALETUDO_AUTH_SERVICE:-valetudo-basic-auth}"
+
+# valetudo_auth_config - print a curl config line carrying the Valetudo Basic
+# Auth login from the Mac keychain, or nothing when none is stored. It is only
+# ever fed to curl on stdin (curl -K -), so the login never appears in process
+# arguments on the Mac or the robot.
+valetudo_auth_config() {
+    local user pass
+
+    user=$(security find-generic-password -s "$VALETUDO_AUTH_SERVICE" 2>/dev/null |
+        sed -n 's/^ *"acct"<blob>="\(.*\)"$/\1/p')
+    [ -n "$user" ] || return 0
+    pass=$(security find-generic-password -s "$VALETUDO_AUTH_SERVICE" -w 2>/dev/null)
+    case "$user:$pass" in
+        *[!A-Za-z0-9._~:-]* | :* | *:) fail "the Valetudo login in the keychain is empty or has unsupported characters" ;;
+    esac
+    printf 'user = "%s:%s"\n' "$user" "$pass"
+}
+
+# vcurl ARGS... - curl on the Mac, sending the Valetudo login if one is stored
+vcurl() {
+    valetudo_auth_config | curl -K - "$@"
+}
+
+# REMOTE_VCURL - prefix for a robot command whose stdin is
+# valetudo_auth_config: it reads the login once into a shell variable, then
+# "vcurl ARGS" runs curl with it (printf is a shell builtin, so the login is
+# not in any process's arguments) and "vcode PATH" prints Valetudo's HTTP
+# status for PATH. Use it with rsh, not rsh_n:
+#   valetudo_auth_config | rsh "$REMOTE_VCURL"'; [ "$(vcode /)" = 200 ]'
+REMOTE_VCURL='VS_AUTH=$(cat); vcurl() { printf "%s\n" "$VS_AUTH" | curl -K - -s -m 5 "$@"; }; vcode() { vcurl -o /dev/null -w "%{http_code}" "http://127.0.0.1$1"; }'
 
 say() {
     echo "$(date +%T) $*" | tee -a "$TOOL_LOG"
@@ -100,7 +135,7 @@ wait_camera_status() {
 }
 
 robot_docked_idle() {
-    rsh_n 'curl -s -m 5 http://127.0.0.1/api/v2/robot/state/attributes' | python3 "$TOOLS_DIR/docked_idle.py"
+    valetudo_auth_config | rsh "$REMOTE_VCURL"'; vcurl http://127.0.0.1/api/v2/robot/state/attributes' | python3 "$TOOLS_DIR/docked_idle.py"
 }
 
 robot_uptime() {

@@ -33,16 +33,20 @@ rsh "cat > /data/valetudo.candidate_$DEPLOY && chmod 755 /data/valetudo.candidat
 [ "$(remote_sha256 "/data/valetudo.candidate_$DEPLOY")" = "$EXPECTED" ] || fail "candidate upload hash mismatch"
 say "candidate uploaded and verified"
 
+# The gate outlives this SSH session, so it reads the login from a private
+# file (empty without one) and deletes it when it finishes.
+valetudo_auth_config | rsh 'umask 077; cat > /tmp/vs_binary_gate.auth' || fail "could not stage the Valetudo login for the gate"
 rsh 'cat > /tmp/vs_binary_gate.sh && chmod 700 /tmp/vs_binary_gate.sh' <<'GATE'
 #!/bin/sh
 DEPLOY="$1"
+trap 'rm -f /tmp/vs_binary_gate.auth' EXIT
 CAND=/data/valetudo.candidate_$DEPLOY
 PREV=/data/valetudo.predeploy_$DEPLOY
 RESULT=/tmp/vs_binary_gate.result
 log() { echo "$(date -u +%T) $*"; }
 healthy() {
-    [ "$(curl -s -o /dev/null -m 4 -w '%{http_code}' http://127.0.0.1/)" = 200 ] &&
-    [ "$(curl -s -o /dev/null -m 4 -w '%{http_code}' http://127.0.0.1/api/v2/robot)" = 200 ]
+    [ "$(curl -K /tmp/vs_binary_gate.auth -s -o /dev/null -m 4 -w '%{http_code}' http://127.0.0.1/)" = 200 ] &&
+    [ "$(curl -K /tmp/vs_binary_gate.auth -s -o /dev/null -m 4 -w '%{http_code}' http://127.0.0.1/api/v2/robot)" = 200 ]
 }
 # 12 consecutive healthy checks 5 s apart (60 s) within 240 s
 gate() {
@@ -80,7 +84,7 @@ rsh_n 'cat /tmp/vs_binary_gate.out' >> "$TOOL_LOG" 2>&1
 say "gate result: ${R:-timeout}"
 [ "$R" = "passed $EXPECTED" ] || fail "binary gate did not pass"
 
-say "runtime version: $(curl -s -m 5 "http://$VACUUM_IP/api/v2/valetudo/version")"
+say "runtime version: $(vcurl -s -m 5 "http://$VACUUM_IP/api/v2/valetudo/version")"
 say "watchdog processes: $(rsh_n 'ps w | grep -c "[v]aletudo_watchdog"')"
 echo "$EXPECTED" > "$MARK.binary_passed"
 say "DONE binary gate passed"
