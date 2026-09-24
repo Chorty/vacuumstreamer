@@ -26,7 +26,15 @@ tools/deploy_native.sh <native-commit> <deploy-id>
 tools/deploy_reboot_gate.sh <artifact-sha256> <valetudo-commit> <deploy-id>
 ```
 
-Each stage refuses to run until the previous one has passed. The deploy ID names the on-robot rollback copies: `/data/valetudo.predeploy_<id>`, `/data/_root_postboot.sh.predeploy_<id>` and `/data/vacuumstreamer/go2rtc.yaml.predeploy_<id>`.
+Each stage refuses to run until the previous one has passed.
+
+For a native-only change, run the backups and `seal_package.sh` as usual (skip `build_valetudo.sh`), then replace step 2 with:
+
+```bash
+tools/deploy_keep_binary.sh <deploy-id> "$PKG"
+```
+
+It checks the same preconditions and leaves the same `/data/valetudo.predeploy_<id>` copy and markers as `deploy_binary.sh`, without touching `/data/valetudo`. Then run `deploy_native.sh`. A script that runs only per request (such as `mic_gain_ctl.sh`) takes effect immediately; verify it over REST. A long-running script (the supervisor, launchers, boot script) or `go2rtc.yaml` takes effect only after a reboot, so run `deploy_reboot_gate.sh` with the active binary's SHA-256 and running Valetudo commit. The deploy ID names the on-robot rollback copies: `/data/valetudo.predeploy_<id>`, `/data/_root_postboot.sh.predeploy_<id>` and `/data/vacuumstreamer/go2rtc.yaml.predeploy_<id>`.
 
 | Tool | Purpose |
 |---|---|
@@ -36,6 +44,7 @@ Each stage refuses to run until the previous one has passed. The deploy ID names
 | `build_valetudo.sh COMMIT [PKG]` | Clean detached clone, OpenAPI schema, lint, type checks, tests, frontend and ARM64 build; checks the embedded commit and pkg warnings |
 | `seal_package.sh PKG` | `BACKUP_INFO.txt` and `SHA256SUMS.txt`, then re-verifies every file |
 | `deploy_binary.sh ARTIFACT ID PKG` | Candidate upload with hash check and on-robot health gate with rollback |
+| `deploy_keep_binary.sh ID PKG` | Native-only stage 1: keeps the active binary, preserves it as the rollback copy and writes the markers the later stages need |
 | `deploy_native.sh COMMIT ID` | Installs native runtime files from a commit with hash and BusyBox syntax checks |
 | `deploy_reboot_gate.sh SHA COMMIT ID` | Reboot, 12 consecutive health checks, full rollback and second reboot on failure |
 | `camera_checks.sh` | Idle stop, cold wake, pause and resume through Valetudo, crash and stall recovery while an RTSP viewer watches |
