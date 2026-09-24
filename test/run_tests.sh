@@ -196,7 +196,7 @@ set_credentials() {
 # layout recorder_quality_ctl.sh edits: camera 0's block in the first 70
 # lines, a second camera's identically-named keys after it, untouched.
 set_recorder_cfg() {
-    local vw=640 vh=480 vf=25 vb=2000000
+    local vw=864 vh=480 vf=15 vb=2000000
 
     case "${1:-high}" in
         low) vw=864; vh=480; vf=15; vb=600000 ;;
@@ -986,7 +986,7 @@ check "recorder quality get: recorder.cfg missing is reported, not a crash" "66"
 new_case
 set_recorder_cfg high
 OUT=$($TEST_SH "$VS_DIR/recorder_quality_ctl.sh" get)
-check "recorder quality get: reads the high profile back" '{"profile":"high","width":640,"height":480,"framerate":25,"bitrate":2000000}' "$OUT"
+check "recorder quality get: reads the high profile back" '{"profile":"high","width":864,"height":480,"framerate":15,"bitrate":2000000}' "$OUT"
 
 new_case
 set_recorder_cfg low
@@ -1034,10 +1034,29 @@ check "recorder quality set: does not restart video_monitor while the camera loc
 contains "recorder quality set: logs the lock timeout" "timed out waiting for the camera lock" "$(cat "$VS_LOG")"
 
 new_case
+set_recorder_cfg low
+OUT=$($TEST_SH "$VS_DIR/recorder_quality_ctl.sh" set high)
+check "recorder quality set high: reports the new profile" '{"profile":"high","width":864,"height":480,"framerate":15,"bitrate":2000000}' "$OUT"
+check "recorder quality set high: camera 0 bitrate is rewritten" "1" "$(grep -c '^encoder_voutput_bitrate = 2000000' "$VS_DIR/ava_conf_video_monitor/recorder.cfg")"
+
+# The encoder only produces a decodable stream at the camera's native
+# 864x480: at any other size video_monitor still sends an 864x480 SPS but
+# encodes slices at the configured width (the former 640x480 "high" showed a
+# green smear in every player). Both profiles must keep the native size.
+for profile in low high; do
+    new_case
+    set_recorder_cfg low
+    $TEST_SH "$VS_DIR/recorder_quality_ctl.sh" set "$profile" > /dev/null
+    CFG="$VS_DIR/ava_conf_video_monitor/recorder.cfg"
+    SIZE="$(sed -n 's/^video_width = //p' "$CFG" | head -1)x$(sed -n 's/^video_height = //p' "$CFG" | head -1) $(sed -n 's/^encoder_voutput_width = //p' "$CFG" | head -1)x$(sed -n 's/^encoder_voutput_height = //p' "$CFG" | head -1)"
+    check "recorder quality set $profile: keeps the camera's native 864x480" "864x480 864x480" "$SIZE"
+done
+
+new_case
 set_recorder_cfg high
 run_script "$VS_DIR/recorder_quality_ctl.sh" set ultra
 check "recorder quality set: an unsupported profile is rejected" "65" "$STATUS"
-check "recorder quality set: config is untouched on rejection" '{"profile":"high","width":640,"height":480,"framerate":25,"bitrate":2000000}' "$($TEST_SH "$VS_DIR/recorder_quality_ctl.sh" get)"
+check "recorder quality set: config is untouched on rejection" '{"profile":"high","width":864,"height":480,"framerate":15,"bitrate":2000000}' "$($TEST_SH "$VS_DIR/recorder_quality_ctl.sh" get)"
 
 new_case
 run_script "$VS_DIR/recorder_quality_ctl.sh"

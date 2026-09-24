@@ -14,7 +14,13 @@
 # Usage: recorder_quality_ctl.sh get
 #        recorder_quality_ctl.sh set PROFILE
 #
-# PROFILE is "low" (864x480/15fps/600kbps) or "high" (640x480/25fps/2Mbps).
+# PROFILE is "low" (864x480/15fps/600kbps) or "high" (864x480/15fps/2Mbps).
+#
+# Both profiles keep the camera's native 864x480 and 15 fps; "high" only
+# raises the bitrate. At any other encoder size video_monitor still sends an
+# 864x480 SPS but encodes slices at the configured width, so every decoder
+# shows a green smear (the former 640x480 "high"), and the camera delivers
+# 15 fps whatever framerate is requested.
 #
 # Exit codes: 64 usage, 65 invalid profile, 66 recorder.cfg not accessible,
 # 67 failed to write recorder.cfg
@@ -120,7 +126,7 @@ case "${1:-}" in
                 vw=864; vh=480; vf=15; vb=600000
                 ;;
             high)
-                vw=640; vh=480; vf=25; vb=2000000
+                vw=864; vh=480; vf=15; vb=2000000
                 ;;
             *)
                 echo "recorder_quality_ctl: invalid profile: $profile (use: low, high)" >&2
