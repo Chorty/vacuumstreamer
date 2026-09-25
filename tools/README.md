@@ -52,6 +52,16 @@ It checks the same preconditions and leaves the same `/data/valetudo.predeploy_<
 | `compare_profiles.py RUNS` | Applies the CLAUDE.md gates against the 2026-07-25 baselines |
 | `integration_local.sh` | Mac-only end-to-end test of the camera scripts with a local go2rtc and ffmpeg standing in for `video_monitor` |
 
+## Valetudo login
+
+When Valetudo Basic Auth is on, every request needs the login, including ones the tools send from the robot itself. The tools read it from the Mac keychain: service `valetudo-basic-auth` (override with `VALETUDO_AUTH_SERVICE`), account = username. Create it with:
+
+```bash
+security add-generic-password -U -a <username> -s valetudo-basic-auth -w   # prompts for the password
+```
+
+The login reaches curl only on stdin (`curl -K -`), never in process arguments. Without the keychain entry the tools send no login, which is correct while Basic Auth is off. With Basic Auth on and no entry, the health gates read 401 as unhealthy and roll back.
+
 ## Requirements
 
 - Mac: `ssh vacuum` configured, Python 3, `shasum`, `ffmpeg` and `ffprobe` for camera tools, `lsof` for `integration_local.sh`
@@ -61,7 +71,7 @@ It checks the same preconditions and leaves the same `/data/valetudo.predeploy_<
 ## Validation
 
 - `compare_profiles.py` and `docked_idle.py` are tested locally; `integration_local.sh` passed locally after parameterization.
-- `build_valetudo.sh`, `backup_ssh.sh`, `backup_robot.sh`, `seal_package.sh` and `deploy_binary.sh` have run against the robot in their parameterized form, most recently for the 2026-09-16 `sync0916` deployment. `backup_hardware.sh`, `deploy_native.sh`, `deploy_reboot_gate.sh`, `camera_checks.sh` and `profiles.sh` keep the commands that ran on 2026-09-13 but were not part of that deployment. Read a script before using it for a deployment.
+- `build_valetudo.sh`, `backup_ssh.sh`, `backup_robot.sh`, `backup_hardware.sh`, `seal_package.sh`, `deploy_binary.sh`, `deploy_native.sh` and `deploy_reboot_gate.sh` ran against the robot for the 2026-09-24 `preset0924` deployment, with the reboot gate passing with `HTTP_BRIDGE=off`. `deploy_keep_binary.sh` ran for the 2026-09-24 native-only `native0924` deployment. The Valetudo login support was verified live with Basic Auth on. `camera_checks.sh` and `profiles.sh` keep the commands that ran on 2026-09-13 and have not run since. Read a script before using it for a deployment.
 - Source `lib.sh` only from bash: it locates helpers through `BASH_SOURCE`, which zsh does not set.
 
 ## Lessons built in
