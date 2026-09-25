@@ -242,6 +242,10 @@ restricted SSH certificate installer. The Mac deployment tools and MCP still
 use HTTP to the robot on the LAN; only Home Assistant's REST traffic is planned
 for this HTTPS route.
 
+As of 2026-09-25, the native scripts and pinned Caddy binary are installed on
+the robot, while `HTTPS_PROXY=off`; the certificate and HA URL migration are
+still pending.
+
 ## TTS & Audio HTTP API
 
 The `tts_handler.sh` script runs via `tcpsvd` on port 6971 and provides:
