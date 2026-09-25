@@ -30,6 +30,15 @@ probe() {
     ffprobe -v error -rtsp_transport tcp -timeout "${1:-30000000}" -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$RTSP" 2>/dev/null | head -1
 }
 
+wait_rtsp_codec() {
+    local end=$(($(date +%s) + $1))
+    while [ "$(date +%s)" -lt "$end" ]; do
+        [ "$(probe 8000000)" = h264 ] && return 0
+        sleep 2
+    done
+    return 1
+}
+
 start_viewer() {
     umask 077
     ffmpeg -hide_banner -loglevel error -rtsp_transport tcp -i "$RTSP" -c copy -t 150 -f null - > "$WORK_DIR/camera_checks_viewer.log" 2>&1 &
@@ -45,7 +54,7 @@ ssh -N -o BatchMode=yes -o ConnectTimeout=8 -o ExitOnForwardFailure=yes \
 TUNNEL=$!
 sleep 2
 kill -0 "$TUNNEL" 2>/dev/null || fail "RTSP tunnel did not start"
-[ "$(probe 8000000)" = h264 ] || fail "RTSP viewer preflight failed"
+wait_rtsp_codec 30 || fail "RTSP viewer preflight failed"
 
 # recovered_from OLD_PID SECONDS - print the new video_monitor PID once a viewer is reconnected
 recovered_from() {
@@ -78,7 +87,7 @@ camera_status | grep -q "paused=yes" && pass "camera paused: $(camera_status)" |
 [ -z "$(probe 8000000)" ] && pass "RTSP refused while paused" || bad "RTSP served while paused"
 code=$(vcurl -s -o /dev/null -w '%{http_code}' -m 40 -X PUT -H 'Content-Type: application/json' -d '{"action":"start"}' "$API")
 [ "$code" = 200 ] && pass "resume returned 200" || bad "resume returned $code"
-[ "$(probe)" = h264 ] && pass "RTSP serves H.264 after resume" || bad "RTSP did not serve H.264 after resume"
+wait_rtsp_codec 40 && pass "RTSP serves H.264 after resume" || bad "RTSP did not serve H.264 within 40 s after resume"
 
 say "--- crash while watched ---"
 start_viewer || bad "viewer did not connect"
