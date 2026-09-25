@@ -22,7 +22,7 @@ tools/deploy_binary.sh "$PKG/artifact_<short>/valetudo-aarch64" <deploy-id> "$PK
 # 3. Native runtime scripts from a committed native revision
 tools/deploy_native.sh <native-commit> <deploy-id>
 
-# 4. Reboot, gate again, and roll back all three files on failure
+# 4. Reboot, gate again, and restore the binary and preserved native files on failure
 tools/deploy_reboot_gate.sh <artifact-sha256> <valetudo-commit> <deploy-id>
 ```
 
@@ -47,7 +47,9 @@ It checks the same preconditions and leaves the same `/data/valetudo.predeploy_<
 | `deploy_keep_binary.sh ID PKG` | Native-only stage 1: keeps the active binary, preserves it as the rollback copy and writes the markers the later stages need |
 | `deploy_native.sh COMMIT ID` | Installs native runtime files from a commit with hash and BusyBox syntax checks |
 | `deploy_reboot_gate.sh SHA COMMIT ID` | Reboot, 12 consecutive health checks, full rollback and second reboot on failure |
+| `install_caddy.sh CADDY ID` | Install the pinned official Caddy v2.11.4 ARM64 binary without enabling HTTPS |
 | `camera_checks.sh` | Idle stop, cold wake, pause and resume through Valetudo, crash and stall recovery while an RTSP viewer watches |
+| `migrate_ha_https.py SOURCE OUTPUT` | Prepare a mode-0600 Home Assistant config with exactly 25 commands and 16 sensors moved to verified HTTPS |
 | `profiles.sh PREFIX` | Docked 10-minute profiles: nobody watching, an RTSP viewer, and `CAMERA_MODE=always`; restores the original mode |
 | `compare_profiles.py RUNS` | Applies the CLAUDE.md gates against the 2026-07-25 baselines |
 | `integration_local.sh` | Mac-only end-to-end test of the camera scripts with a local go2rtc and ffmpeg standing in for `video_monitor` |
@@ -60,7 +62,20 @@ When Valetudo Basic Auth is on, every request needs the login, including ones th
 security add-generic-password -U -a <username> -s valetudo-basic-auth -w   # prompts for the password
 ```
 
-The login reaches curl only on stdin (`curl -K -`), never in process arguments. Without the keychain entry the tools send no login, which is correct while Basic Auth is off. With Basic Auth on and no entry, the health gates read 401 as unhealthy and roll back.
+The login reaches curl only on stdin (`curl -K -`), never in process arguments. An absent keychain entry is allowed only if an unauthenticated preflight receives HTTP 200 from Valetudo. With Basic Auth on and no entry, or if the keychain read fails, deployment aborts **before activation or reboot**. Each deploy stage caches one validated login, so a later keychain failure cannot turn a healthy post-reboot check into a rollback. The detached binary gate uses a unique mode-0700 directory under `/tmp`, holds its curl config at mode 0600, and removes the directory on exit; the Mac removes it if upload or launch fails.
+
+## Home Assistant HTTPS rollout
+
+As of 2026-09-25 the official Home Assistant Let's Encrypt app is installed but stopped and unconfigured. The robot still has `HTTPS_PROXY=off`, and HA's 25 REST commands and 16 REST sensors still use HTTP. Complete these steps in order:
+
+1. Register `mattjoslin-valetudo.duckdns.org` in the existing DuckDNS account and set **only that name's** A record to `192.168.1.31`. Check that Home Assistant resolves it to that address. Do not add it to the existing Duck DNS app's dynamic public-IP list. If the LAN resolver filters private answers, override this name locally while keeping the certificate name the same.
+2. Configure the separate official Let's Encrypt app for a **robot-only** certificate: domain `mattjoslin-valetudo.duckdns.org`, `challenge: dns`, `dns.provider: dns-duckdns`, `dns.duckdns_token` from the existing account, `certfile: valetudo-fullchain.pem`, and `keyfile: valetudo-privkey.pem`. Use the owner's ACME contact email and accept the app's terms. Start it once; confirm the private files under `/ssl/`. Do not reuse Home Assistant's own fullchain/key. The app stops after each check, so schedule `hassio.app_start` for `core_letsencrypt` daily at 02:00.
+3. Back up the robot. Download Caddy v2.11.4 from the official release: `caddy_2.11.4_linux_arm64.tar.gz` has SHA-256 `52d42ae12b3462097e9868da6dfed3c9648ae12edd3b3638102312af84cb6904`; its extracted `caddy` has SHA-256 `e1f904038fc11ca897ac5a12fdacfb2a7add02a8720c426d562a37f6fdad2afe`. Run `tools/install_caddy.sh <extracted-caddy> <deploy-id>`; the tool checks the extracted hash and remote copy.
+4. Deploy the native scripts, including `https_proxy.sh`, `https_cert_install.sh`, and `https_proxy.Caddyfile`, through the normal native-only stages. On Home Assistant OS, generate a dedicated key at `/config/.ssh/valetudo_https_ed25519`, with mode 0600 and a pinned robot host key in `/config/.ssh/known_hosts`. Add its public key to the robot's `authorized_keys` with `from="192.168.1.106",no-agent-forwarding,no-port-forwarding,no-pty,command="/data/vacuumstreamer/https_cert_install.sh"`. Confirm this robot's Dropbear honors the forced command before relying on it.
+5. Copy `tools/ha_https_cert_sync.sh` to `/config/valetudo_https_cert_sync.sh` at mode 0700. Add `shell_command.valetudo_https_cert_sync` to run that fixed script. It sends the PEM files on SSH stdin; the forced command accepts only `cert`, `key`, and `activate`, checks hostname, expiry and matching public keys, validates Caddy's config, then restarts the proxy. `tools/ha_https_automations.yaml` contains the separate daily renewal check and 03:00 install attempt. The latter inspects `returncode` and creates a persistent notification on failure. A certificate within 14 days of expiry makes activation fail and therefore alerts.
+6. Set `HTTPS_PROXY=on` and run the reboot gate. Verify from Home Assistant that the name resolves to `192.168.1.31`, the certificate chain and name validate, wrong credentials get 401, and the correct login gets 200 over HTTPS. Verify non-HA LAN sources receive 403. Only then use `migrate_ha_https.py` to prepare a private config, back up HA's current file, validate the exact 41 URL changes, apply it, run HA's configuration check, reload the REST command/sensor integrations, and confirm the controls and sensors. Keep the existing mic/video automation guards.
+
+This route encrypts HA's REST requests. The Mac deployment tools and MCP still use Basic Auth over HTTP on the LAN and remain a separate transport risk. `camera_checks.sh` uses an SSH-local RTSP tunnel so ffmpeg receives a credential-free URL.
 
 ## Requirements
 
@@ -71,7 +86,7 @@ The login reaches curl only on stdin (`curl -K -`), never in process arguments. 
 ## Validation
 
 - `compare_profiles.py` and `docked_idle.py` are tested locally; `integration_local.sh` passed locally after parameterization.
-- `build_valetudo.sh`, `backup_ssh.sh`, `backup_robot.sh`, `backup_hardware.sh`, `seal_package.sh`, `deploy_binary.sh`, `deploy_native.sh` and `deploy_reboot_gate.sh` ran against the robot for the 2026-09-24 `preset0924` deployment, with the reboot gate passing with `HTTP_BRIDGE=off`. `deploy_keep_binary.sh` ran for the 2026-09-24 native-only `native0924` deployment. The Valetudo login support was verified live with Basic Auth on. `camera_checks.sh` and `profiles.sh` keep the commands that ran on 2026-09-13 and have not run since. Read a script before using it for a deployment.
+- `build_valetudo.sh`, `backup_ssh.sh`, `backup_robot.sh`, `backup_hardware.sh`, `seal_package.sh`, `deploy_binary.sh`, `deploy_native.sh` and `deploy_reboot_gate.sh` ran against the robot for the 2026-09-24 `preset0924` deployment, with the reboot gate passing with `HTTP_BRIDGE=off`. `deploy_keep_binary.sh` ran for the 2026-09-24 native-only `native0924` deployment. The 2026-09-25 gate fixes have passed 298 local tests in both dash and sh but are not yet deployed. The new HTTPS proxy has not been enabled. `camera_checks.sh` and `profiles.sh` keep the commands that ran on 2026-09-13 and have not run since. Read a script before using it for a deployment.
 - Source `lib.sh` only from bash: it locates helpers through `BASH_SOURCE`, which zsh does not set.
 
 ## Lessons built in

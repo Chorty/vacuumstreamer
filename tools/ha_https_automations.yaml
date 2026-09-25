@@ -1,0 +1,40 @@
+# Apply only after the DuckDNS challenge has issued the robot certificate and
+# the restricted installer has been verified. Add the shell_command entry to
+# configuration.yaml, then add these two entries to automations.yaml.
+# shell_command:
+#   valetudo_https_cert_sync: /config/valetudo_https_cert_sync.sh
+
+- id: valetudo_robot_certificate_renewal_check
+  alias: Valetudo robot certificate renewal check
+  triggers:
+    - trigger: time
+      at: "02:00:00"
+  actions:
+    - action: hassio.app_start
+      data:
+        app: core_letsencrypt
+  mode: single
+
+- id: valetudo_robot_certificate_install
+  alias: Valetudo robot certificate install
+  triggers:
+    - trigger: time
+      at: "03:00:00"
+  actions:
+    - action: shell_command.valetudo_https_cert_sync
+      response_variable: install_result
+    - if: "{{ install_result['returncode'] != 0 }}"
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: valetudo_robot_certificate_install
+            title: Valetudo HTTPS certificate needs attention
+            message: >-
+              The daily certificate installation failed. Check the Let's
+              Encrypt app and the restricted robot installer. The installer
+              also rejects certificates with less than 14 days remaining.
+      else:
+        - action: persistent_notification.dismiss
+          data:
+            notification_id: valetudo_robot_certificate_install
+  mode: single

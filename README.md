@@ -136,8 +136,9 @@ Or append the vacuumstreamer block to your existing `_root_postboot.sh` — see 
 | `MAP_MANAGEMENT` | `on` | The Valetudo floor management capability |
 | `HTTP_BRIDGE` | `on` | The port 6971 bridge (`tts_handler.sh`, run by `http_bridge.sh`) |
 | `HTTP_BRIDGE_ALLOW` | `any` | Addresses allowed to use the bridge, separated by spaces or commas. The robot itself is always allowed; other clients get 403. Read on every request, so no reboot is needed |
+| `HTTPS_PROXY` | `off` | Supervised Caddy entry point on port 443 for Home Assistant; requires a dedicated certificate and the pinned Caddy binary |
 
-The bridge has no login, and it can start cleaning and drive the robot, so set `HTTP_BRIDGE_ALLOW` to your Home Assistant host. The most recently refused address is written to `/tmp/vacuumstreamer/bridge_denied_last`.
+The bridge has no login, and it can start cleaning and drive the robot. It is **off on the deployed robot** since 2026-09-24. If enabled on another install, restrict `HTTP_BRIDGE_ALLOW` to the Home Assistant host. The most recently refused address is written to `/tmp/vacuumstreamer/bridge_denied_last`.
 
 The scripts parse the file without executing it and log to `/tmp/vacuumstreamer.log`. The bind mounts and mixer settings apply whichever features are on, so the AVA and audio environment stays the same.
 
@@ -219,9 +220,27 @@ nice level -- and only when it is already running.
 ./recorder_quality_ctl.sh set high # {"profile":"high","width":864,"height":480,"framerate":15,"bitrate":2000000}
 ```
 
-The bridge endpoints remain for now, while Home Assistant is migrated onto
-the new capabilities; see the port 6971 retirement note in the project's
-`MEMORY.md`.
+Home Assistant now uses the native capabilities, and the deployed bridge is
+off. The bridge endpoints below remain available for installs that opt in to
+`HTTP_BRIDGE=on`.
+
+## Home Assistant HTTPS entry point
+
+Valetudo itself still serves HTTP on port 80. The optional `HTTPS_PROXY=on`
+starts a supervised Caddy proxy on port 443 with a certificate for
+`mattjoslin-valetudo.duckdns.org`. Its Caddyfile accepts only
+`192.168.1.106` (Home Assistant) and robot localhost, then forwards the
+original Basic Auth header to Valetudo. It has no credential-bearing access
+log. The DNS name may resolve to the robot's private address; DNS-01
+certificate issuance does not require an inbound internet port.
+
+Keep this switch off until the separate certificate and key are installed in
+`credentials/https-fullchain.pem` and `credentials/https-privkey.pem`, the
+official pinned Caddy binary is installed, and Home Assistant has verified the
+HTTPS endpoint. `tools/README.md` documents installation, renewal, and the
+restricted SSH certificate installer. The Mac deployment tools and MCP still
+use HTTP to the robot on the LAN; only Home Assistant's REST traffic is planned
+for this HTTPS route.
 
 ## TTS & Audio HTTP API
 
