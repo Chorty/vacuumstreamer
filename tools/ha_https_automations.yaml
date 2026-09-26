@@ -23,7 +23,8 @@
   actions:
     - action: shell_command.valetudo_https_cert_sync
       response_variable: install_result
-    - if: "{{ install_result['returncode'] != 0 }}"
+      continue_on_error: true
+    - if: "{{ install_result is not defined or install_result['returncode'] != 0 }}"
       then:
         - action: persistent_notification.create
           data:
