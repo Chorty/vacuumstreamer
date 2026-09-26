@@ -1090,6 +1090,52 @@ new_case
 run_script "$VS_DIR/recorder_quality_ctl.sh"
 check "recorder quality: missing action is a usage error" "64" "$STATUS"
 
+# Exercise the retired bridge handler's high path against a disposable
+# recorder.cfg. The process restart is stubbed; the actual handler logic and
+# BusyBox-style in-place edits still run and must agree with the native profile.
+new_case
+set_recorder_cfg low
+REAL_SED=$(PATH="$ORIGINAL_PATH" command -v sed)
+export REAL_SED
+cat > "$VS_DIR/bin/sed" <<'STUB'
+#!/bin/sh
+if [ "$1" = -i ]; then
+    shift
+    expression=$1
+    target=$2
+    # BSD sed needs a separator before the closing brace that BusyBox accepts.
+    case "$expression" in *}) expression=$(printf '%s\n}' "${expression%?}") ;; esac
+    "$REAL_SED" "$expression" "$target" > "$target.tts_tmp" || exit 1
+    mv -f "$target.tts_tmp" "$target"
+else
+    exec "$REAL_SED" "$@"
+fi
+STUB
+chmod 755 "$VS_DIR/bin/sed"
+python3 - "$VS_DIR/tts_handler.sh" "$VS_DIR/tts_quality_test.sh" <<'PY'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+changes = {
+    'RECORDER_CFG="/data/vacuumstreamer/ava_conf_video_monitor/recorder.cfg"':
+        'RECORDER_CFG="$VS_DIR/ava_conf_video_monitor/recorder.cfg"',
+    '        LD_PRELOAD=/data/vacuumstreamer/vacuumstreamer.so /data/vacuumstreamer/video_monitor > /dev/null 2>&1 &':
+        '        : # isolate process restart in this test',
+}
+for old, replacement in changes.items():
+    if source.count(old) != 1:
+        raise SystemExit('TTS quality test no longer matches source')
+    source = source.replace(old, replacement, 1)
+Path(sys.argv[2]).write_text(source)
+PY
+RESPONSE=$(printf 'GET /video_quality/high HTTP/1.0\r\n\r\n' | TCPREMOTEADDR=127.0.0.1 $TEST_SH "$VS_DIR/tts_quality_test.sh")
+contains "TTS quality high: response reports the native 864x480 profile" '"profile":"high","width":864,"height":480,"framerate":15,"bitrate":2000000' "$RESPONSE"
+CFG="$VS_DIR/ava_conf_video_monitor/recorder.cfg"
+check "TTS quality high: encoder width" "864" "$(sed -n 's/^encoder_voutput_width = //p' "$CFG" | head -1)"
+check "TTS quality high: encoder height" "480" "$(sed -n 's/^encoder_voutput_height = //p' "$CFG" | head -1)"
+check "TTS quality high: encoder bitrate" "2000000" "$(sed -n 's/^encoder_voutput_bitrate = //p' "$CFG" | head -1)"
+check "TTS quality high: camera 1 remains untouched" "1" "$(grep -c '^encoder_voutput_width = 320' "$CFG")"
+
 # --- Deployment script list ---
 
 # tools/deploy_native.sh installs exactly the scripts in tools/lib.sh's
