@@ -12,6 +12,8 @@ DEPLOY="${2:?usage: deploy_native.sh NATIVE_COMMIT DEPLOY_ID}"
 check_id "$DEPLOY"
 MARK="$WORK_DIR/deploy_$DEPLOY"
 [ -f "$MARK.binary_passed" ] || fail "binary stage for $DEPLOY has not passed (tools/deploy_binary.sh)"
+valetudo_auth_preflight || fail "Valetudo authentication preflight failed; native files not changed"
+robot_docked_idle_cached || fail "robot is not docked with an idle dock"
 
 COMMIT=$(git -C "$NATIVE_REPO" rev-parse "$COMMIT_ARG^{commit}") || fail "unknown commit $COMMIT_ARG"
 E=$(mktemp -d)
@@ -55,6 +57,7 @@ rsh_n '/data/vacuumstreamer/go2rtc_launch.sh --check' || fail "go2rtc_launch.sh 
 say "camera status: $(camera_status)"
 
 POSTBOOT_MODE=$(rsh_n 'stat -c %a /data/_root_postboot.sh')
+install_file https_proxy.Caddyfile /data/vacuumstreamer/https_proxy.Caddyfile 644
 install_file go2rtc.yaml /data/vacuumstreamer/go2rtc.yaml 644
 install_file _root_postboot.sh /data/_root_postboot.sh "$POSTBOOT_MODE"
 rsh_n 'sh -n /data/_root_postboot.sh' || fail "robot syntax check failed for _root_postboot.sh"

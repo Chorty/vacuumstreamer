@@ -402,6 +402,23 @@ vs_port_listening() {
     [ "$VS_PORT_LISTENING" = "yes" ]
 }
 
+# vs_bridge_healthy - tie the deploy gate to port 6971 and a harmless bridge
+# response. Other tcpsvd instances elsewhere must not affect the result.
+vs_bridge_healthy() {
+    local response
+    if [ "$(vs_switch HTTP_BRIDGE on)" = off ]; then
+        ! vs_port_listening 6971
+        return
+    fi
+
+    vs_port_listening 6971 || return 1
+    response=$(curl -fsS -m 4 http://127.0.0.1:6971/video_quality 2>/dev/null) || return 1
+    case "$response" in
+        *'"profile":"low"'* | *'"profile":"high"'*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # vs_port_connected PORT - succeed when a client is connected to a local
 # listener on TCP PORT.
 vs_port_connected() {

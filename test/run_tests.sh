@@ -915,6 +915,18 @@ lacks "bridge off: boot does not start the bridge" "http_bridge" "$ACTIONS"
 contains "bridge off: the camera supervisor still starts" "background: $VS_DIR/camera_supervisor.sh" "$ACTIONS"
 
 new_case
+set_conf "HTTPS_PROXY=on"
+ACTIONS=$(boot_actions)
+contains "HTTPS proxy on: boot starts its supervisor" "background: $VS_DIR/https_proxy.sh" "$ACTIONS"
+
+new_case
+set_conf "HTTPS_PROXY=on"
+rm "$VS_DIR/video_monitor"
+ACTIONS=$(boot_actions)
+contains "HTTPS proxy does not depend on the camera binary" "background: $VS_DIR/https_proxy.sh" "$ACTIONS"
+lacks "missing camera binary still skips camera startup" "camera_supervisor" "$ACTIONS"
+
+new_case
 rm "$VS_DIR/video_monitor"
 ACTIONS=$(boot_actions)
 check "without video_monitor installed boot does nothing" "" "$ACTIONS"
@@ -1078,6 +1090,52 @@ new_case
 run_script "$VS_DIR/recorder_quality_ctl.sh"
 check "recorder quality: missing action is a usage error" "64" "$STATUS"
 
+# Exercise the retired bridge handler's high path against a disposable
+# recorder.cfg. The process restart is stubbed; the actual handler logic and
+# BusyBox-style in-place edits still run and must agree with the native profile.
+new_case
+set_recorder_cfg low
+REAL_SED=$(PATH="$ORIGINAL_PATH" command -v sed)
+export REAL_SED
+cat > "$VS_DIR/bin/sed" <<'STUB'
+#!/bin/sh
+if [ "$1" = -i ]; then
+    shift
+    expression=$1
+    target=$2
+    # BSD sed needs a separator before the closing brace that BusyBox accepts.
+    case "$expression" in *}) expression=$(printf '%s\n}' "${expression%?}") ;; esac
+    "$REAL_SED" "$expression" "$target" > "$target.tts_tmp" || exit 1
+    mv -f "$target.tts_tmp" "$target"
+else
+    exec "$REAL_SED" "$@"
+fi
+STUB
+chmod 755 "$VS_DIR/bin/sed"
+python3 - "$VS_DIR/tts_handler.sh" "$VS_DIR/tts_quality_test.sh" <<'PY'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+changes = {
+    'RECORDER_CFG="/data/vacuumstreamer/ava_conf_video_monitor/recorder.cfg"':
+        'RECORDER_CFG="$VS_DIR/ava_conf_video_monitor/recorder.cfg"',
+    '        LD_PRELOAD=/data/vacuumstreamer/vacuumstreamer.so /data/vacuumstreamer/video_monitor > /dev/null 2>&1 &':
+        '        : # isolate process restart in this test',
+}
+for old, replacement in changes.items():
+    if source.count(old) != 1:
+        raise SystemExit('TTS quality test no longer matches source')
+    source = source.replace(old, replacement, 1)
+Path(sys.argv[2]).write_text(source)
+PY
+RESPONSE=$(printf 'GET /video_quality/high HTTP/1.0\r\n\r\n' | TCPREMOTEADDR=127.0.0.1 $TEST_SH "$VS_DIR/tts_quality_test.sh")
+contains "TTS quality high: response reports the native 864x480 profile" '"profile":"high","width":864,"height":480,"framerate":15,"bitrate":2000000' "$RESPONSE"
+CFG="$VS_DIR/ava_conf_video_monitor/recorder.cfg"
+check "TTS quality high: encoder width" "864" "$(sed -n 's/^encoder_voutput_width = //p' "$CFG" | head -1)"
+check "TTS quality high: encoder height" "480" "$(sed -n 's/^encoder_voutput_height = //p' "$CFG" | head -1)"
+check "TTS quality high: encoder bitrate" "2000000" "$(sed -n 's/^encoder_voutput_bitrate = //p' "$CFG" | head -1)"
+check "TTS quality high: camera 1 remains untouched" "1" "$(grep -c '^encoder_voutput_width = 320' "$CFG")"
+
 # --- Deployment script list ---
 
 # tools/deploy_native.sh installs exactly the scripts in tools/lib.sh's
@@ -1124,12 +1182,12 @@ cat > "$AUTH_T/bin/curl" <<'STUB'
 #!/bin/sh
 echo "$*" >> "$AUTH_T_DIR/args"
 cat >> "$AUTH_T_DIR/stdin"
-echo 200
+if [ -f "$AUTH_T_DIR/code" ]; then tr -d '\n' < "$AUTH_T_DIR/code"; else printf 200; fi
 STUB
 chmod 755 "$AUTH_T/bin/curl"
 REMOTE_VCURL_DEF=$(sed -n "s/^REMOTE_VCURL='\(.*\)'$/\1/p" "$REPO/tools/lib.sh")
 check "tools auth: REMOTE_VCURL is defined in tools/lib.sh" "yes" "$([ -n "$REMOTE_VCURL_DEF" ] && echo yes || echo no)"
-CODE=$(printf 'user = "admin:s3cretLogin"\n' | AUTH_T_DIR="$AUTH_T" PATH="$AUTH_T/bin:$PATH" $TEST_SH -c "$REMOTE_VCURL_DEF"'; vcode /api/v2/robot; vcode /')
+CODE=$(printf 'user = "admin:s3cretLogin"\n' | AUTH_T_DIR="$AUTH_T" PATH="$AUTH_T/bin:$PATH" $TEST_SH -c "$REMOTE_VCURL_DEF"'; vcode /api/v2/robot; printf "\n"; vcode /')
 check "tools auth: vcode reports the HTTP status" "200
 200" "$CODE"
 check "tools auth: the login never appears in curl's arguments" "no" "$(grep -q s3cretLogin "$AUTH_T/args" && echo yes || echo no)"
@@ -1141,8 +1199,14 @@ contains "tools auth: curl is told to read its config from stdin" "-K -" "$(cat 
 if command -v bash > /dev/null 2>&1; then
     cat > "$AUTH_T/bin/security" <<'STUB'
 #!/bin/sh
+[ -f "$AUTH_T_DIR/fail_details" ] && exit 1
 [ -f "$AUTH_T_DIR/entry" ] || exit 44
-if [ "$3" = "-w" ] || [ "$4" = "-w" ]; then sed -n 2p "$AUTH_T_DIR/entry"; else echo "    \"acct\"<blob>=\"$(sed -n 1p "$AUTH_T_DIR/entry")\""; fi
+if [ "$3" = "-w" ] || [ "$4" = "-w" ]; then
+    [ -f "$AUTH_T_DIR/fail_password" ] && exit 1
+    sed -n 2p "$AUTH_T_DIR/entry"
+else
+    echo "    \"acct\"<blob>=\"$(sed -n 1p "$AUTH_T_DIR/entry")\""
+fi
 STUB
     chmod 755 "$AUTH_T/bin/security"
     auth_config() {
@@ -1153,16 +1217,259 @@ STUB
     check "tools auth: a keychain entry becomes one curl config line" 'user = "admin:s3cretLogin"' "$(auth_config)"
     printf 'admin\nbad"quote\n' > "$AUTH_T/entry"
     OUT=$(auth_config)
-    contains "tools auth: a login with unsafe characters is refused" "ABORT" "$OUT"
+    check "tools auth: a login with unsafe characters is refused" "1" "$?"
     check "tools auth: a refused login is not printed" "no" "$(printf '%s' "$OUT" | grep -q 'bad"quote' && echo yes || echo no)"
+    printf 'admin\ns3cretLogin\n' > "$AUTH_T/entry"
+    touch "$AUTH_T/fail_password"
+    OUT=$(auth_config)
+    check "tools auth: password retrieval failure propagates" "1" "$?"
+    check "tools auth: failed password retrieval prints no config" "" "$OUT"
+    rm -f "$AUTH_T/fail_password"
+    touch "$AUTH_T/fail_details"
+    OUT=$(auth_config)
+    check "tools auth: keychain failure differs from missing entry" "1" "$?"
+    check "tools auth: keychain failure prints no config" "" "$OUT"
+    rm -f "$AUTH_T/fail_details"
+
+    # Exercise the actual preflight with a robot-shell stub. A missing entry is
+    # accepted only if Valetudo answers 200; a 401 stops before any deploy.
+    rm -f "$AUTH_T/entry" "$AUTH_T/code"
+    AUTH_T_DIR="$AUTH_T" PATH="$AUTH_T/bin:$PATH" WORK_DIR="$AUTH_T/work" \
+        bash -c ". '$REPO/tools/lib.sh'; rsh() { sh -c \"\$1\"; }; valetudo_auth_preflight" 2>"$AUTH_T/preflight_err"
+    check "tools auth: no entry passes when Basic Auth is off" "0" "$?"
+    check "tools auth: successful preflight has no stderr" "" "$(cat "$AUTH_T/preflight_err")"
+    printf '401\n' > "$AUTH_T/code"
+    AUTH_T_DIR="$AUTH_T" PATH="$AUTH_T/bin:$PATH" WORK_DIR="$AUTH_T/work" \
+        bash -c ". '$REPO/tools/lib.sh'; rsh() { sh -c \"\$1\"; }; valetudo_auth_preflight" 2>/dev/null
+    check "tools auth: no entry aborts before deploy when Basic Auth is on" "1" "$?"
+    rm -f "$AUTH_T/code"
+    printf 'admin\ns3cretLogin\n' > "$AUTH_T/entry"
+    AUTH_T_DIR="$AUTH_T" PATH="$AUTH_T/bin:$PATH" WORK_DIR="$AUTH_T/work" \
+        bash -c ". '$REPO/tools/lib.sh'; rsh() { sh -c \"\$1\"; }; valetudo_auth_preflight || exit 1; rm -f '$AUTH_T/entry'; remote_vcurl_cached 'vcode /'" > "$AUTH_T/cached_result" 2>/dev/null
+    check "tools auth: cached config survives a later keychain outage" "200" "$(cat "$AUTH_T/cached_result")"
 fi
 
 # No tool may call Valetudo's HTTP API without the login helpers.
 BARE=$(grep -n 'curl' "$REPO"/tools/*.sh | grep -E '127\.0\.0\.1/|VACUUM_IP/api' | grep -v -E 'vcurl|vcode|curl -K')
 check "tools auth: every Valetudo request goes through vcurl/vcode or curl -K" "" "$BARE"
 
-# The reboot gate must follow HTTP_BRIDGE instead of always requiring the bridge.
-check "reboot gate: requires the bridge only when HTTP_BRIDGE is on" "yes" "$(grep -q 'vs_switch HTTP_BRIDGE on' "$REPO/tools/deploy_reboot_gate.sh" && echo yes || echo no)"
+# Exercise the bridge predicate the reboot gate calls. An unrelated tcpsvd
+# process is deliberately irrelevant; only 6971 and the bridge body count.
+bridge_case() {
+    printf 'HTTP_BRIDGE=%s\n' "$1" > "$AUTH_T/bridge.conf"
+    VS_CONF="$AUTH_T/bridge.conf" BRIDGE_PORT="$2" BRIDGE_BODY="$3" \
+        "$TEST_SH" -c '. "$1/vacuumstreamer_lib.sh"; vs_port_listening() { [ "$BRIDGE_PORT" = open ]; }; curl() { printf "%s" "$BRIDGE_BODY"; }; vs_bridge_healthy' sh "$REPO" > /dev/null 2>&1
+    echo $?
+}
+check "reboot gate: bridge off tolerates unrelated tcpsvd" "0" "$(bridge_case off closed ignored)"
+check "reboot gate: bridge off rejects port 6971 listener" "1" "$(bridge_case off open ignored)"
+check "reboot gate: bridge on rejects a closed port" "1" "$(bridge_case on closed ignored)"
+check "reboot gate: bridge on rejects an unrelated HTTP listener" "1" "$(bridge_case on open unrelated)"
+check "reboot gate: bridge on accepts its read-only endpoint" "0" "$(bridge_case on open '{"profile":"high"}')"
+
+# Run the same detached binary gate uploaded by deploy_binary.sh against
+# disposable paths. Fake time advances immediately; curl responds according to
+# the active candidate so the rollback path is exercised without a robot.
+GATE_T="$TMP_ROOT/binary_gate"
+mkdir -p "$GATE_T/bin"
+cat > "$GATE_T/bin/date" <<'STUB'
+#!/bin/sh
+if [ "$1" = +%s ]; then
+    tick=$(cat "$GATE_T/tick")
+    tick=$((tick + 1))
+    echo "$tick" > "$GATE_T/tick"
+    echo "$tick"
+else
+    echo 00:00:00
+fi
+STUB
+cat > "$GATE_T/bin/curl" <<'STUB'
+#!/bin/sh
+case "$*" in *test-only-login*) exit 1 ;; esac
+[ -f "$GATE_DIR/auth" ] && [ "$(stat -f %Lp "$GATE_DIR/auth" 2>/dev/null || stat -c %a "$GATE_DIR/auth")" = 600 ] || exit 1
+if [ "$GATE_MODE" = rollback ] && [ "$(cat "$GATE_BASE/valetudo")" = candidate ]; then
+    printf 503
+else
+    printf 200
+fi
+STUB
+for stub in sleep sync killall; do
+    cat > "$GATE_T/bin/$stub" <<'STUB'
+#!/bin/sh
+exit 0
+STUB
+done
+chmod 755 "$GATE_T/bin/"*
+binary_gate_case() {
+    local mode="$1" base="$GATE_T/$1" result status
+    mkdir -p "$base/private"
+    chmod 700 "$base/private"
+    printf 'user = "test:test-only-login"\n' > "$base/private/auth"
+    chmod 600 "$base/private/auth"
+    printf previous > "$base/valetudo"
+    printf previous > "$base/valetudo.predeploy_test"
+    [ "$mode" = missing ] || printf candidate > "$base/valetudo.candidate_test"
+    echo 0 > "$GATE_T/tick"
+    result="$base/result"
+    GATE_T="$GATE_T" GATE_BASE="$base" GATE_DIR="$base/private" GATE_MODE="$mode" PATH="$GATE_T/bin:$PATH" \
+        "$TEST_SH" "$REPO/tools/binary_gate.sh" test "$base/private" "$base" "$result" > "$base/output" 2>&1
+    status=$?
+    check "binary gate $mode: private auth directory removed" "no" "$(exists "$base/private")"
+    check "binary gate $mode: log does not contain login" "no" "$(grep -q test-only-login "$base/output" && echo yes || echo no)"
+    case "$mode" in
+        success)
+            check "binary gate success: exit" "0" "$status"
+            check "binary gate success: active candidate" candidate "$(cat "$base/valetudo")"
+            contains "binary gate success: result" "passed " "$(cat "$result")"
+            ;;
+        rollback)
+            check "binary gate rollback: exit" "0" "$status"
+            check "binary gate rollback: previous binary restored" previous "$(cat "$base/valetudo")"
+            contains "binary gate rollback: result" "rolled_back " "$(cat "$result")"
+            ;;
+        missing)
+            check "binary gate activation failure: exit" "1" "$status"
+            check "binary gate activation failure: result" activation_failed "$(cat "$result")"
+            ;;
+    esac
+}
+binary_gate_case success
+binary_gate_case rollback
+binary_gate_case missing
+
+# Exercise the real post-reboot wait and consecutive-check window without
+# sending a reboot. The stubbed SSH boot ID changes only in the success case.
+REBOOT_T="$TMP_ROOT/reboot_gate"
+mkdir -p "$REBOOT_T"
+cat > "$REBOOT_T/run.sh" <<'STUB'
+#!/bin/bash
+. "$REPO/tools/reboot_gate_functions.sh"
+say() { :; }
+sleep() { :; }
+date() {
+    tick=$(cat "$REBOOT_T/tick")
+    tick=$((tick + TICK_STEP))
+    echo "$tick" > "$REBOOT_T/tick"
+    echo "$tick"
+}
+rsh_n() {
+    case "$1" in
+        'cat /proc/sys/kernel/random/boot_id')
+            poll=$(cat "$REBOOT_T/poll")
+            poll=$((poll + 1))
+            echo "$poll" > "$REBOOT_T/poll"
+            if [ "$MODE" = reboot_success ] && [ "$poll" -ge 4 ]; then echo new; else echo old; fi
+            ;;
+        *) : ;;
+    esac
+}
+gate_check() {
+    poll=$(cat "$REBOOT_T/poll")
+    poll=$((poll + 1))
+    echo "$poll" > "$REBOOT_T/poll"
+    [ "$MODE" = gate_success ] && [ "$poll" -gt 2 ]
+}
+echo 0 > "$REBOOT_T/tick"
+echo 0 > "$REBOOT_T/poll"
+case "$MODE" in
+    reboot_success|reboot_timeout) reboot_and_wait ;;
+    gate_success|gate_timeout) gate gate_check ;;
+esac
+STUB
+reboot_case() {
+    local mode="$1" step="$2" status
+    REPO="$REPO" REBOOT_T="$REBOOT_T" MODE="$mode" TICK_STEP="$step" bash "$REBOOT_T/run.sh" > /dev/null 2>&1
+    status=$?
+    echo "$status $(cat "$REBOOT_T/poll")"
+}
+check "reboot gate: delayed new boot ID succeeds" "0 4" "$(reboot_case reboot_success 1)"
+check "reboot gate: unchanged boot ID times out" "1 6" "$(reboot_case reboot_timeout 100)"
+check "reboot gate: two failures reset before twelve successes" "0 14" "$(reboot_case gate_success 1)"
+check "reboot gate: persistent failure times out" "1 2" "$(reboot_case gate_timeout 100)"
+
+# Run the actual new_healthy fragment with stubbed robot processes and TLS.
+# An HTTPS certificate failure must fail the gate; --insecure would make the
+# stub fail even when TLS_OK=1, so this also guards against reintroducing -k.
+cat > "$REBOOT_T/healthy_lib.sh" <<'STUB'
+vs_bridge_healthy() { return 0; }
+vs_switch() { echo "$HTTPS_STATE"; }
+vs_port_listening() { [ "$1" = 443 ]; }
+STUB
+sed "s|/data/vacuumstreamer/vacuumstreamer_lib.sh|$REBOOT_T/healthy_lib.sh|g" \
+    "$REPO/tools/reboot_gate_functions.sh" > "$REBOOT_T/healthy_functions.sh"
+cat > "$REBOOT_T/healthy_run.sh" <<'STUB'
+#!/bin/bash
+. "$REBOOT_T/healthy_functions.sh"
+remote_vcurl_cached() { eval "$1"; }
+vcode() { echo 200; }
+pidof() { return 0; }
+ps() { printf 'valetudo_watchdog\ncamera_supervisor.sh\n'; }
+vcurl() {
+    case " $* " in *' -k '*|*' --insecure '*) return 60 ;; esac
+    if [ "$TLS_OK" = yes ]; then printf 200; else printf 000; return 60; fi
+}
+new_healthy
+STUB
+healthy_case() {
+    HTTPS_STATE="$1" TLS_OK="$2" REBOOT_T="$REBOOT_T" bash "$REBOOT_T/healthy_run.sh" > /dev/null 2>&1
+    echo $?
+}
+check "reboot gate: HTTPS off ignores TLS" 0 "$(healthy_case off no)"
+check "reboot gate: verified HTTPS passes" 0 "$(healthy_case on yes)"
+check "reboot gate: invalid HTTPS certificate fails" 1 "$(healthy_case on no)"
+
+# Validate the restricted certificate installer with a disposable self-signed
+# pair. These are test credentials; the production path and host remain fixed.
+CERT_T="$TMP_ROOT/https_cert"
+mkdir -p "$CERT_T/robot" "$CERT_T/bin"
+sed "s|/data/vacuumstreamer|$CERT_T/robot|g" "$REPO/https_cert_install.sh" > "$CERT_T/install.sh"
+cat > "$CERT_T/robot/caddy" <<'STUB'
+#!/bin/sh
+[ "$1" = validate ] && [ "${CADDY_FAIL:-0}" = 0 ]
+STUB
+cat > "$CERT_T/bin/killall" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "$CERT_T/kills"
+STUB
+chmod 755 "$CERT_T/robot/caddy" "$CERT_T/bin/killall"
+: > "$CERT_T/robot/https_proxy.Caddyfile"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+    -keyout "$CERT_T/key" -out "$CERT_T/cert" -days 30 \
+    -subj /CN=mattjoslin-valetudo.duckdns.org \
+    -addext subjectAltName=DNS:mattjoslin-valetudo.duckdns.org > /dev/null 2>&1
+CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_CONNECTION='' SSH_ORIGINAL_COMMAND=cert "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/cert"
+check "HTTPS installer: missing SSH source refused" "1" "$?"
+CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_CONNECTION='192.168.1.113 4321 192.168.1.31 22' SSH_ORIGINAL_COMMAND=cert "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/cert"
+check "HTTPS installer: non-HA source refused" "1" "$?"
+check "HTTPS installer: non-HA source left no credentials" "no" "$(exists "$CERT_T/robot/credentials")"
+SSH_CONNECTION='192.168.1.106 4321 192.168.1.31 22'
+export SSH_CONNECTION
+CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=cert "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/cert"
+check "HTTPS installer: cert upload succeeds" "0" "$?"
+CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=key "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/key"
+check "HTTPS installer: key upload succeeds" "0" "$?"
+CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=activate "$TEST_SH" "$CERT_T/install.sh"
+check "HTTPS installer: matching named pair activates" "0" "$?"
+check "HTTPS installer: private key mode" "600" "$(stat -f %Lp "$CERT_T/robot/credentials/https-privkey.pem" 2>/dev/null || stat -c %a "$CERT_T/robot/credentials/https-privkey.pem")"
+check "HTTPS installer: proxy restarted" caddy "$(cat "$CERT_T/kills")"
+CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=arbitrary "$TEST_SH" "$CERT_T/install.sh" < /dev/null
+check "HTTPS installer: arbitrary remote command refused" "1" "$?"
+printf 'invalid key\n' > "$CERT_T/bad_key"
+CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=key "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/bad_key"
+CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=activate "$TEST_SH" "$CERT_T/install.sh" > /dev/null 2>&1
+check "HTTPS installer: invalid replacement key refused" "1" "$?"
+check "HTTPS installer: previous key remains active" "yes" "$(cmp -s "$CERT_T/key" "$CERT_T/robot/credentials/https-privkey.pem" && echo yes || echo no)"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+    -keyout "$CERT_T/replacement_key" -out "$CERT_T/replacement_cert" -days 30 \
+    -subj /CN=mattjoslin-valetudo.duckdns.org \
+    -addext subjectAltName=DNS:mattjoslin-valetudo.duckdns.org > /dev/null 2>&1
+CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=cert "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/replacement_cert"
+CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=key "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/replacement_key"
+CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" CADDY_FAIL=1 SSH_ORIGINAL_COMMAND=activate "$TEST_SH" "$CERT_T/install.sh" > /dev/null 2>&1
+check "HTTPS installer: Caddy rejection aborts activation" "1" "$?"
+check "HTTPS installer: Caddy rejection restores certificate" "yes" "$(cmp -s "$CERT_T/cert" "$CERT_T/robot/credentials/https-fullchain.pem" && echo yes || echo no)"
+check "HTTPS installer: Caddy rejection restores key" "yes" "$(cmp -s "$CERT_T/key" "$CERT_T/robot/credentials/https-privkey.pem" && echo yes || echo no)"
+check "HTTPS installer: no previous key remains after rollback" "no" "$(exists "$CERT_T/robot/credentials/https-privkey.pem.previous")"
 
 printf '%s passed, %s failed (shell: %s)\n' "$PASS" "$FAIL" "$TEST_SH"
 [ "$FAIL" -eq 0 ]

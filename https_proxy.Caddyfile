@@ -1,0 +1,14 @@
+{
+    auto_https off
+    admin off
+}
+
+mattjoslin-valetudo.duckdns.org:443 {
+    tls /data/vacuumstreamer/credentials/https-fullchain.pem /data/vacuumstreamer/credentials/https-privkey.pem
+
+    @allowed remote_ip 127.0.0.1 192.168.1.106
+    handle @allowed {
+        reverse_proxy 127.0.0.1:80
+    }
+    respond 403
+}

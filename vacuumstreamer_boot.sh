@@ -8,12 +8,17 @@
 VS_SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 . "$VS_SCRIPT_DIR/vacuumstreamer_lib.sh"
 
+https_proxy=$(vs_switch HTTPS_PROXY off)
+if [ "$https_proxy" = "on" ]; then
+    vs_background "$VS_DIR/https_proxy.sh"
+fi
+
 [ -f "$VS_DIR/video_monitor" ] || exit 0
 
 camera=$(vs_switch CAMERA on)
 http_bridge=$(vs_switch HTTP_BRIDGE on)
 
-vs_log "boot: CAMERA=$camera CAMERA_MODE=$(vs_camera_mode) CAMERA_LOGIN=$(vs_switch CAMERA_LOGIN off) TTS=$(vs_switch TTS on) MAP_MANAGEMENT=$(vs_switch MAP_MANAGEMENT on) HTTP_BRIDGE=$http_bridge"
+vs_log "boot: CAMERA=$camera CAMERA_MODE=$(vs_camera_mode) CAMERA_LOGIN=$(vs_switch CAMERA_LOGIN off) TTS=$(vs_switch TTS on) MAP_MANAGEMENT=$(vs_switch MAP_MANAGEMENT on) HTTP_BRIDGE=$http_bridge HTTPS_PROXY=$https_proxy"
 
 vs_run mount --bind "$VS_DIR/ava_conf_video_monitor" /ava/conf/video_monitor
 vs_run mount --bind "$VS_DIR/mnt_private_copy" /mnt/private

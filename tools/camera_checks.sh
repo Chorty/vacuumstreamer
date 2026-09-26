@@ -9,10 +9,12 @@ set -u
 . "$(dirname "$0")/lib.sh"
 
 API="http://$VACUUM_IP/api/v2/robot/capabilities/VideoStreamCapability"
-RTSP="rtsp://$VACUUM_IP:8554/vacuum"
+LOCAL_RTSP_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()') || fail "cannot allocate a local RTSP port"
+RTSP="rtsp://127.0.0.1:$LOCAL_RTSP_PORT/vacuum"
 FAILED=0
 VIEWER=""
 FROZEN=""
+TUNNEL=""
 
 pass() { say "PASS $*"; }
 bad() { say "FAIL $*"; FAILED=$((FAILED + 1)); }
@@ -20,6 +22,7 @@ bad() { say "FAIL $*"; FAILED=$((FAILED + 1)); }
 cleanup() {
     [ -n "$VIEWER" ] && kill "$VIEWER" 2>/dev/null
     [ -n "$FROZEN" ] && rsh_n "kill -CONT $FROZEN 2>/dev/null; [ -d /proc/$FROZEN ] && kill -KILL $FROZEN 2>/dev/null"
+    [ -n "$TUNNEL" ] && kill "$TUNNEL" 2>/dev/null
 }
 trap cleanup EXIT
 
@@ -27,11 +30,31 @@ probe() {
     ffprobe -v error -rtsp_transport tcp -timeout "${1:-30000000}" -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$RTSP" 2>/dev/null | head -1
 }
 
+wait_rtsp_codec() {
+    local end=$(($(date +%s) + $1))
+    while [ "$(date +%s)" -lt "$end" ]; do
+        [ "$(probe 8000000)" = h264 ] && return 0
+        sleep 2
+    done
+    return 1
+}
+
 start_viewer() {
+    umask 077
     ffmpeg -hide_banner -loglevel error -rtsp_transport tcp -i "$RTSP" -c copy -t 150 -f null - > "$WORK_DIR/camera_checks_viewer.log" 2>&1 &
     VIEWER=$!
     wait_camera_status 40 "viewer=connected"
 }
+
+# Robot-local go2rtc clients do not need camera credentials. The tunnel keeps
+# the RTSP URL credential-free even when CAMERA_LOGIN=on.
+command -v ffmpeg > /dev/null 2>&1 && command -v ffprobe > /dev/null 2>&1 || fail "ffmpeg and ffprobe are required"
+ssh -N -o BatchMode=yes -o ConnectTimeout=8 -o ExitOnForwardFailure=yes \
+    -L "127.0.0.1:$LOCAL_RTSP_PORT:127.0.0.1:8554" "$VACUUM_SSH" > /dev/null 2>&1 &
+TUNNEL=$!
+sleep 2
+kill -0 "$TUNNEL" 2>/dev/null || fail "RTSP tunnel did not start"
+wait_rtsp_codec 30 || fail "RTSP viewer preflight failed"
 
 # recovered_from OLD_PID SECONDS - print the new video_monitor PID once a viewer is reconnected
 recovered_from() {
@@ -64,7 +87,7 @@ camera_status | grep -q "paused=yes" && pass "camera paused: $(camera_status)" |
 [ -z "$(probe 8000000)" ] && pass "RTSP refused while paused" || bad "RTSP served while paused"
 code=$(vcurl -s -o /dev/null -w '%{http_code}' -m 40 -X PUT -H 'Content-Type: application/json' -d '{"action":"start"}' "$API")
 [ "$code" = 200 ] && pass "resume returned 200" || bad "resume returned $code"
-[ "$(probe)" = h264 ] && pass "RTSP serves H.264 after resume" || bad "RTSP did not serve H.264 after resume"
+wait_rtsp_codec 40 && pass "RTSP serves H.264 after resume" || bad "RTSP did not serve H.264 within 40 s after resume"
 
 say "--- crash while watched ---"
 start_viewer || bad "viewer did not connect"
