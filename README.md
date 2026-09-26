@@ -234,18 +234,16 @@ original Basic Auth header to Valetudo. It has no credential-bearing access
 log. The DNS name may resolve to the robot's private address; DNS-01
 certificate issuance does not require an inbound internet port.
 
-Keep this switch off until the separate certificate and key are installed in
-`credentials/https-fullchain.pem` and `credentials/https-privkey.pem`, the
-official pinned Caddy binary is installed, and Home Assistant has verified the
-HTTPS endpoint. `tools/README.md` documents installation, renewal, and the
-restricted SSH certificate installer. The Mac deployment tools and MCP still
-use HTTP to the robot on the LAN; only Home Assistant's REST traffic is planned
-for this HTTPS route.
+The separate Let's Encrypt app on Home Assistant OS owns the robot-only
+certificate in `/ssl/valetudo-*.pem`; the restricted HA SSH key sends it to
+`credentials/https-*.pem` over stdin. The installer checks hostname, matching
+key, and at least 14 days of remaining validity before activating it.
+`tools/README.md` documents renewal, the installer, and the reboot gate.
 
-As of 2026-09-25, the native scripts and pinned Caddy binary are installed on
-the robot, while `HTTPS_PROXY=off`. Home Assistant has issued the robot
-certificate, but it has not yet been installed on the robot; the HA REST URL
-migration is also pending.
+As of 2026-09-26, `HTTPS_PROXY=on` passed the 12/12 reboot gate. Home
+Assistant's 25 REST commands and 16 REST sensors use verified HTTPS, and all
+16 sensors were available after its Core restart. The Mac deployment tools
+and MCP still use HTTP on the LAN; their transport remains a follow-up risk.
 
 ## TTS & Audio HTTP API
 
