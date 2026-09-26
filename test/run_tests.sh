@@ -1391,6 +1391,13 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
     -keyout "$CERT_T/key" -out "$CERT_T/cert" -days 30 \
     -subj /CN=mattjoslin-valetudo.duckdns.org \
     -addext subjectAltName=DNS:mattjoslin-valetudo.duckdns.org > /dev/null 2>&1
+CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_CONNECTION='' SSH_ORIGINAL_COMMAND=cert "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/cert"
+check "HTTPS installer: missing SSH source refused" "1" "$?"
+CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_CONNECTION='192.168.1.113 4321 192.168.1.31 22' SSH_ORIGINAL_COMMAND=cert "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/cert"
+check "HTTPS installer: non-HA source refused" "1" "$?"
+check "HTTPS installer: non-HA source left no credentials" "no" "$(exists "$CERT_T/robot/credentials")"
+SSH_CONNECTION='192.168.1.106 4321 192.168.1.31 22'
+export SSH_CONNECTION
 CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=cert "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/cert"
 check "HTTPS installer: cert upload succeeds" "0" "$?"
 CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=key "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/key"

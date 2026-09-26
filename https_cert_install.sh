@@ -10,6 +10,14 @@ CADDY=/data/vacuumstreamer/caddy
 CADDYFILE=/data/vacuumstreamer/https_proxy.Caddyfile
 umask 077
 
+# Dropbear 2020.81 has no authorized_keys from= restriction. Its
+# SSH_CONNECTION value is set by the server, so reject every source except
+# Home Assistant before creating or changing any file.
+case "${SSH_CONNECTION:-}" in
+    "192.168.1.106 "*) ;;
+    *) exit 1 ;;
+esac
+
 mkdir -p "$DIR" || exit 1
 chmod 700 "$DIR" || exit 1
 
