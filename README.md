@@ -4,7 +4,7 @@ Stream live video and two-way audio from Dreame/3iRobot vacuum cleaners running 
 
 Uses the vacuum's built-in `video_monitor` binary with an `LD_PRELOAD` hook (`vacuumstreamer.so`) to intercept the Agora RTC video pipeline and redirect H.264 frames to a local TCP socket, which [go2rtc](https://github.com/AlexxIT/go2rtc) picks up for WebRTC/RTSP streaming.
 
-Tested on: Dreame L10s Ultra (Allwinner MR813/sun50iw10, ARM64, Athena Linux).
+Tested on: Dreame L10s Ultra and L10S Pro Ultra Heat (Allwinner MR813/sun50iw10, ARM64, Athena Linux).
 
 ## Features
 
@@ -87,9 +87,9 @@ Copy the runtime scripts and go2rtc config:
 
 ```bash
 scp -O go2rtc.yaml root@${VACUUM_IP}:/data/vacuumstreamer/go2rtc.yaml
+scp -O https_proxy.Caddyfile root@${VACUUM_IP}:/data/vacuumstreamer/https_proxy.Caddyfile
 scp -O play_pcm.sh root@${VACUUM_IP}:/data/vacuumstreamer/play_pcm.sh
-scp -O tts_handler.sh root@${VACUUM_IP}:/data/vacuumstreamer/tts_handler.sh
-for f in vacuumstreamer_lib.sh vacuumstreamer_boot.sh go2rtc_launch.sh video_monitor_launch.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh; do
+for f in vacuumstreamer_lib.sh vacuumstreamer_boot.sh go2rtc_launch.sh video_monitor_launch.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh mic_gain_ctl.sh recorder_quality_ctl.sh http_bridge.sh tts_handler.sh https_proxy.sh https_cert_install.sh; do
     scp -O "$f" root@${VACUUM_IP}:/data/vacuumstreamer/"$f"
 done
 ssh root@${VACUUM_IP} "chmod +x /data/vacuumstreamer/*.sh"
@@ -98,6 +98,12 @@ ssh root@${VACUUM_IP} "chmod +x /data/vacuumstreamer/*.sh"
 scp -O vacuumstreamer.conf root@${VACUUM_IP}:/tmp/vacuumstreamer.conf
 ssh root@${VACUUM_IP} "[ -f /data/vacuumstreamer/vacuumstreamer.conf ] || mv /tmp/vacuumstreamer.conf /data/vacuumstreamer/vacuumstreamer.conf"
 ```
+
+For an existing robot, use the backup and staged deployment gates in
+[`tools/README.md`](tools/README.md) instead of copying files directly. The
+port-6971 bridge is unauthenticated: set `HTTP_BRIDGE=off` unless you
+deliberately use it with a restricted allowlist. Keep `HTTPS_PROXY=off` until
+the certificate, key, and Caddy binary are installed and verified.
 
 **Important:** Edit `go2rtc.yaml` and update the `candidates` IP address to match your vacuum's IP.
 
@@ -142,7 +148,7 @@ The bridge has no login, and it can start cleaning and drive the robot. It is **
 
 The scripts parse the file without executing it and log to `/tmp/vacuumstreamer.log`. The bind mounts and mixer settings apply whichever features are on, so the AVA and audio environment stays the same.
 
-Run the script tests with `sh test/run_tests.sh dash`.
+Run the script tests with `sh test/run_tests.sh dash` and `sh test/run_tests.sh sh`.
 
 ### Camera Modes and Supervision
 
@@ -185,10 +191,16 @@ reboot
 
 Both values may use only letters, digits, `.`, `_`, `~` and `-`, and the password needs at least 16 characters. If the credentials are missing, readable by other users or invalid, go2rtc and `video_monitor` are not started and the reason is written to `/tmp/vacuumstreamer.log`. Starting the stream from Valetudo is refused with the same reason.
 
-Requests from the robot itself are not challenged. Other clients authenticate as follows:
+The deployed robot has `CAMERA_LOGIN=on`. Requests from the robot itself
+are not challenged. Other clients use their application's credential fields
+for these credential-free endpoint URLs:
 
-- **RTSP:** `rtsp://viewer:PASSWORD@<VACUUM_IP>:8554/vacuum`
-- **API, still frames, HLS and the web UI:** HTTP basic auth, for example `http://viewer:PASSWORD@<VACUUM_IP>:1984/api/frame.jpeg?src=vacuum`
+- **RTSP:** `rtsp://<VACUUM_IP>:8554/vacuum`
+- **API, still frames, HLS and the web UI:** `http://<VACUUM_IP>:1984/api/frame.jpeg?src=vacuum` with HTTP Basic Auth
+
+Keep the login out of command-line URLs and logs. In particular, ffmpeg prints
+a full RTSP URL on errors; `tools/camera_checks.sh` uses an SSH-local RTSP
+tunnel so its ffmpeg URL contains no credential.
 
 Update Home Assistant's camera and WebRTC card URLs after turning the login on. Backups of `/data` contain the credentials.
 
@@ -302,15 +314,15 @@ current installation.
 
 Home Assistant uses Valetudo MQTT discovery for the native microphone gain,
 recorder quality, TTS, video switch, and robot controls. The 25 REST commands
-and 16 REST sensors currently use Valetudo's port 80 with Basic Auth stored in
-Home Assistant `secrets.yaml`. The old port 6971 REST definitions were removed
-on 2026-09-24. The Generic Camera integration uses authenticated go2rtc media;
-its credentials are separate from the Valetudo Basic Auth login.
+and 16 REST sensors use verified HTTPS through the robot's Caddy proxy,
+with Basic Auth stored in Home Assistant `secrets.yaml`. The old port-6971
+REST definitions were removed on 2026-09-24. The Generic Camera integration
+uses authenticated go2rtc media; its credentials are separate from the
+Valetudo Basic Auth login.
 
-The separate verified HTTPS route for Home Assistant is staged but inactive.
-Follow `tools/README.md` for the robot certificate, restricted SSH installer,
-reboot gate, and exact REST URL migration. Keep the existing mic and video
-automation loop guards.
+The verified HTTPS route is active. See `tools/README.md` for certificate
+renewal, the restricted SSH installer, and recovery steps. The existing mic
+and video automation loop guards remain in place.
 
 ## File Reference
 
