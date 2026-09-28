@@ -89,7 +89,7 @@ Copy the runtime scripts and go2rtc config:
 scp -O go2rtc.yaml root@${VACUUM_IP}:/data/vacuumstreamer/go2rtc.yaml
 scp -O https_proxy.Caddyfile root@${VACUUM_IP}:/data/vacuumstreamer/https_proxy.Caddyfile
 scp -O play_pcm.sh root@${VACUUM_IP}:/data/vacuumstreamer/play_pcm.sh
-for f in vacuumstreamer_lib.sh vacuumstreamer_boot.sh go2rtc_launch.sh video_monitor_launch.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh mic_gain_ctl.sh recorder_quality_ctl.sh http_bridge.sh tts_handler.sh https_proxy.sh https_cert_install.sh; do
+for f in vacuumstreamer_lib.sh vacuumstreamer_boot.sh go2rtc_launch.sh video_monitor_launch.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh mic_gain_ctl.sh recorder_quality_ctl.sh http_bridge.sh tts_handler.sh https_cert_state.sh https_proxy.sh https_cert_install.sh; do
     scp -O "$f" root@${VACUUM_IP}:/data/vacuumstreamer/"$f"
 done
 ssh root@${VACUUM_IP} "chmod +x /data/vacuumstreamer/*.sh"

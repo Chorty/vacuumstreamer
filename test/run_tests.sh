@@ -1250,7 +1250,7 @@ STUB
 fi
 
 # No tool may call Valetudo's HTTP API without the login helpers.
-BARE=$(grep -n 'curl' "$REPO"/tools/*.sh | grep -E '127\.0\.0\.1/|VACUUM_IP/api' | grep -v -E 'vcurl|vcode|curl -K')
+BARE=$(grep -n 'curl' "$REPO"/tools/*.sh | grep -E '127\.0\.0\.1/|VACUUM_IP/api' | grep -v -E 'vcurl|vcode|curl (-q )?-K')
 check "tools auth: every Valetudo request goes through vcurl/vcode or curl -K" "" "$BARE"
 
 # Exercise the bridge predicate the reboot gate calls. An unrelated tcpsvd
@@ -1418,58 +1418,9 @@ check "reboot gate: HTTPS off ignores TLS" 0 "$(healthy_case off no)"
 check "reboot gate: verified HTTPS passes" 0 "$(healthy_case on yes)"
 check "reboot gate: invalid HTTPS certificate fails" 1 "$(healthy_case on no)"
 
-# Validate the restricted certificate installer with a disposable self-signed
-# pair. These are test credentials; the production path and host remain fixed.
-CERT_T="$TMP_ROOT/https_cert"
-mkdir -p "$CERT_T/robot" "$CERT_T/bin"
-sed "s|/data/vacuumstreamer|$CERT_T/robot|g" "$REPO/https_cert_install.sh" > "$CERT_T/install.sh"
-cat > "$CERT_T/robot/caddy" <<'STUB'
-#!/bin/sh
-[ "$1" = validate ] && [ "${CADDY_FAIL:-0}" = 0 ]
-STUB
-cat > "$CERT_T/bin/killall" <<'STUB'
-#!/bin/sh
-printf '%s\n' "$*" >> "$CERT_T/kills"
-STUB
-chmod 755 "$CERT_T/robot/caddy" "$CERT_T/bin/killall"
-: > "$CERT_T/robot/https_proxy.Caddyfile"
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
-    -keyout "$CERT_T/key" -out "$CERT_T/cert" -days 30 \
-    -subj /CN=mattjoslin-valetudo.duckdns.org \
-    -addext subjectAltName=DNS:mattjoslin-valetudo.duckdns.org > /dev/null 2>&1
-CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_CONNECTION='' SSH_ORIGINAL_COMMAND=cert "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/cert"
-check "HTTPS installer: missing SSH source refused" "1" "$?"
-CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_CONNECTION='192.168.1.113 4321 192.168.1.31 22' SSH_ORIGINAL_COMMAND=cert "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/cert"
-check "HTTPS installer: non-HA source refused" "1" "$?"
-check "HTTPS installer: non-HA source left no credentials" "no" "$(exists "$CERT_T/robot/credentials")"
-SSH_CONNECTION='192.168.1.106 4321 192.168.1.31 22'
-export SSH_CONNECTION
-CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=cert "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/cert"
-check "HTTPS installer: cert upload succeeds" "0" "$?"
-CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=key "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/key"
-check "HTTPS installer: key upload succeeds" "0" "$?"
-CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=activate "$TEST_SH" "$CERT_T/install.sh"
-check "HTTPS installer: matching named pair activates" "0" "$?"
-check "HTTPS installer: private key mode" "600" "$(stat -f %Lp "$CERT_T/robot/credentials/https-privkey.pem" 2>/dev/null || stat -c %a "$CERT_T/robot/credentials/https-privkey.pem")"
-check "HTTPS installer: proxy restarted" caddy "$(cat "$CERT_T/kills")"
-CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=arbitrary "$TEST_SH" "$CERT_T/install.sh" < /dev/null
-check "HTTPS installer: arbitrary remote command refused" "1" "$?"
-printf 'invalid key\n' > "$CERT_T/bad_key"
-CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=key "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/bad_key"
-CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=activate "$TEST_SH" "$CERT_T/install.sh" > /dev/null 2>&1
-check "HTTPS installer: invalid replacement key refused" "1" "$?"
-check "HTTPS installer: previous key remains active" "yes" "$(cmp -s "$CERT_T/key" "$CERT_T/robot/credentials/https-privkey.pem" && echo yes || echo no)"
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
-    -keyout "$CERT_T/replacement_key" -out "$CERT_T/replacement_cert" -days 30 \
-    -subj /CN=mattjoslin-valetudo.duckdns.org \
-    -addext subjectAltName=DNS:mattjoslin-valetudo.duckdns.org > /dev/null 2>&1
-CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=cert "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/replacement_cert"
-CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" SSH_ORIGINAL_COMMAND=key "$TEST_SH" "$CERT_T/install.sh" < "$CERT_T/replacement_key"
-CERT_T="$CERT_T" PATH="$CERT_T/bin:$PATH" CADDY_FAIL=1 SSH_ORIGINAL_COMMAND=activate "$TEST_SH" "$CERT_T/install.sh" > /dev/null 2>&1
-check "HTTPS installer: Caddy rejection aborts activation" "1" "$?"
-check "HTTPS installer: Caddy rejection restores certificate" "yes" "$(cmp -s "$CERT_T/cert" "$CERT_T/robot/credentials/https-fullchain.pem" && echo yes || echo no)"
-check "HTTPS installer: Caddy rejection restores key" "yes" "$(cmp -s "$CERT_T/key" "$CERT_T/robot/credentials/https-privkey.pem" && echo yes || echo no)"
-check "HTTPS installer: no previous key remains after rollback" "no" "$(exists "$CERT_T/robot/credentials/https-privkey.pem.previous")"
+# Isolated real-OpenSSL installer/HA tests (no device or network operations).
+python3 "$REPO/test/https_cert_test.py" "$TEST_SH"
+check "HTTPS transaction suite" "0" "$?"
 
 printf '%s passed, %s failed (shell: %s)\n' "$PASS" "$FAIL" "$TEST_SH"
 [ "$FAIL" -eq 0 ]
