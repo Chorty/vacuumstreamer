@@ -20,8 +20,15 @@ import os
 import sys
 
 PROFILES = os.environ.get("PROFILE_ROOT", os.path.expanduser("~/Documents/ValetudoProfiles"))
-DEFAULT_ON = os.path.join(PROFILES, "2026-07-25T03-35-49-686Z_corrected-docked-video-on_lObcm0")
-DEFAULT_OFF = os.path.join(PROFILES, "2026-07-25T03-49-39-677Z_corrected-docked-video-off_iLEV6V")
+# Since 2026-09-28 profiles.sh measures through a robot-terminated SSH tunnel
+# (Basic Auth and CAMERA_LOGIN), which adds dropbear CPU and latency. These
+# defaults are the first tunnelled docked runs (53-74 min after boot):
+# camera idle, and always mode (capturing, nobody watching). The direct-LAN
+# 2026-07-25 runs 2026-07-25T03-49-39-677Z_corrected-docked-video-off_iLEV6V
+# and 2026-07-25T03-35-49-686Z_corrected-docked-video-on_lObcm0 remain
+# available through --base-off/--base-on for historical comparison.
+DEFAULT_ON = os.path.join(PROFILES, "2026-09-29T02-25-51-693Z_certtx0928-docked-camera-always_kWTEWB")
+DEFAULT_OFF = os.path.join(PROFILES, "2026-09-29T02-05-41-201Z_certtx0928-docked-camera-idle_D54gC6")
 TITLES = {
     "idle": "camera idle (nobody watching)",
     "watched": "camera watched (RTSP viewer)",
