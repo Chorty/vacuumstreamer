@@ -8,7 +8,7 @@
 set -u
 . "$(dirname "$0")/lib.sh"
 
-API="http://$VACUUM_IP/api/v2/robot/capabilities/VideoStreamCapability"
+valetudo_auth_preflight || fail "Valetudo authentication preflight failed"
 LOCAL_RTSP_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()') || fail "cannot allocate a local RTSP port"
 RTSP="rtsp://127.0.0.1:$LOCAL_RTSP_PORT/vacuum"
 FAILED=0
@@ -80,12 +80,12 @@ t0=$(now_float); codec=$(probe)
 [ "$codec" = h264 ] && pass "cold wake: H.264 stream info after $(since "$t0")s" || bad "cold wake returned ${codec:-nothing}"
 
 say "--- pause and resume through Valetudo ---"
-code=$(vcurl -s -o /dev/null -w '%{http_code}' -m 40 -X PUT -H 'Content-Type: application/json' -d '{"action":"stop"}' "$API")
+code=$(remote_vcurl_cached 'vcurl -o /dev/null -w "%{http_code}" -m 40 -X PUT -H "Content-Type: application/json" -d "{\"action\":\"stop\"}" http://127.0.0.1/api/v2/robot/capabilities/VideoStreamCapability')
 [ "$code" = 200 ] && pass "pause returned 200" || bad "pause returned $code"
 sleep 6
 camera_status | grep -q "paused=yes" && pass "camera paused: $(camera_status)" || bad "camera not paused: $(camera_status)"
 [ -z "$(probe 8000000)" ] && pass "RTSP refused while paused" || bad "RTSP served while paused"
-code=$(vcurl -s -o /dev/null -w '%{http_code}' -m 40 -X PUT -H 'Content-Type: application/json' -d '{"action":"start"}' "$API")
+code=$(remote_vcurl_cached 'vcurl -o /dev/null -w "%{http_code}" -m 40 -X PUT -H "Content-Type: application/json" -d "{\"action\":\"start\"}" http://127.0.0.1/api/v2/robot/capabilities/VideoStreamCapability')
 [ "$code" = 200 ] && pass "resume returned 200" || bad "resume returned $code"
 wait_rtsp_codec 40 && pass "RTSP serves H.264 after resume" || bad "RTSP did not serve H.264 within 40 s after resume"
 

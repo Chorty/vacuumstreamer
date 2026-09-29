@@ -17,6 +17,8 @@ MIN_UPTIME="${MIN_UPTIME:-1440}"
 RTSP="rtsp://$VACUUM_IP:8554/vacuum"
 RUNS="$WORK_DIR/profiles_$PREFIX.txt"
 VIEWER=""
+TUNNEL=""
+HTTP_PORT=""
 ORIGINAL_MODE=""
 
 set_mode() {
@@ -25,6 +27,7 @@ set_mode() {
 
 cleanup() {
     [ -n "$VIEWER" ] && kill "$VIEWER" 2>/dev/null
+    [ -n "$TUNNEL" ] && kill "$TUNNEL" 2>/dev/null
     [ -n "$ORIGINAL_MODE" ] && set_mode "$ORIGINAL_MODE"
 }
 trap cleanup EXIT
@@ -33,12 +36,21 @@ run_profile() { # SCENARIO
     local label="$PREFIX-docked-camera-$1" dir
     robot_docked_idle || fail "robot not docked and idle before $1"
     say "START $label uptime=$(robot_uptime)s camera: $(camera_status)"
-    (cd "$VALETUDO_REPO" && npm run profile_vacuum_resources -- --label "$label" --duration "$DURATION") >> "$TOOL_LOG" 2>&1
+    (cd "$VALETUDO_REPO" && npm run profile_vacuum_resources -- --label "$label" --duration "$DURATION" --http-base "http://127.0.0.1:$HTTP_PORT" --ssh-host "$VACUUM_SSH" --output "$PROFILE_ROOT") >> "$TOOL_LOG" 2>&1 || fail "profile failed: $label"
     dir=$(ls -dt "$PROFILE_ROOT"/*_"$label"_* 2>/dev/null | head -1)
     say "END $label dir=$dir camera: $(camera_status)"
     robot_docked_idle && say "$label: still docked and idle" || say "$label: NOT docked and idle at the end"
     echo "$1 $dir" >> "$RUNS"
 }
+
+valetudo_auth_preflight || fail "Valetudo authentication preflight failed"
+HTTP_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()') || fail "cannot allocate HTTP tunnel port"
+ssh -N -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=8 -o ExitOnForwardFailure=yes \
+    -L "127.0.0.1:$HTTP_PORT:127.0.0.1:80" "$VACUUM_SSH" > /dev/null 2>&1 &
+TUNNEL=$!
+sleep 1
+kill -0 "$TUNNEL" 2>/dev/null || fail "HTTP tunnel did not start"
+export VALETUDO_AUTH_SERVICE
 
 ORIGINAL_MODE=$(rsh_n "sed -n 's/^CAMERA_MODE=//p' /data/vacuumstreamer/vacuumstreamer.conf | tail -1")
 ORIGINAL_MODE="${ORIGINAL_MODE:-on_demand}"

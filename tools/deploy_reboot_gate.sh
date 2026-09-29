@@ -21,8 +21,8 @@ robot_docked_idle_cached || fail "robot is not docked with an idle dock"
 
 if reboot_and_wait && gate new_healthy &&
    [ "$(remote_sha256 /data/valetudo)" = "$EXPECTED" ] &&
-   vcurl_cached -s -m 5 "http://$VACUUM_IP/api/v2/valetudo/version" | grep -q "$COMMIT"; then
-    say "runtime version: $(vcurl_cached -s -m 5 "http://$VACUUM_IP/api/v2/valetudo/version")"
+   remote_vcurl_cached 'vcurl http://127.0.0.1/api/v2/valetudo/version' | grep -q "$COMMIT"; then
+    say "runtime version: $(remote_vcurl_cached 'vcurl http://127.0.0.1/api/v2/valetudo/version')"
     say "boot log: $(rsh_n 'grep "boot:" /tmp/vacuumstreamer.log | tail -1')"
     say "camera: $(camera_status)"
     touch "$MARK.reboot_passed"

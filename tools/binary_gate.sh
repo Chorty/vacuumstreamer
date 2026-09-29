@@ -16,8 +16,8 @@ trap 'exit 1' HUP INT TERM
 
 log() { echo "$(date -u +%T) $*"; }
 healthy() {
-    [ "$(curl -K "$GATE_DIR/auth" -s -o /dev/null -m 4 -w '%{http_code}' http://127.0.0.1/)" = 200 ] &&
-    [ "$(curl -K "$GATE_DIR/auth" -s -o /dev/null -m 4 -w '%{http_code}' http://127.0.0.1/api/v2/robot)" = 200 ]
+    [ "$(curl -q -K "$GATE_DIR/auth" --noproxy "*" --proto "=http" -s -o /dev/null -m 4 -w '%{http_code}' http://127.0.0.1/)" = 200 ] &&
+    [ "$(curl -q -K "$GATE_DIR/auth" --noproxy "*" --proto "=http" -s -o /dev/null -m 4 -w '%{http_code}' http://127.0.0.1/api/v2/robot)" = 200 ]
 }
 # 12 consecutive healthy checks 5 s apart (60 s) within 240 s.
 gate() {

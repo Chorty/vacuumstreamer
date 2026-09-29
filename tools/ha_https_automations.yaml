@@ -3,6 +3,7 @@
 # configuration.yaml, then add these two entries to automations.yaml.
 # shell_command:
 #   valetudo_https_cert_sync: /config/valetudo_https_cert_sync.sh
+#   valetudo_https_cert_check: /config/valetudo_https_cert_sync.sh check
 
 - id: valetudo_robot_certificate_renewal_check
   alias: Valetudo robot certificate renewal check
@@ -38,4 +39,30 @@
         - action: persistent_notification.dismiss
           data:
             notification_id: valetudo_robot_certificate_install
+  mode: single
+
+# Independent of issuance/install: check the certificate actually served, even
+# if either daily automation was disabled or missed its time trigger.
+- id: valetudo_robot_certificate_monitor
+  alias: Valetudo robot certificate monitor
+  triggers:
+    - trigger: time_pattern
+      minutes: "/30"
+    - trigger: homeassistant
+      event: start
+  actions:
+    - action: shell_command.valetudo_https_cert_check
+      response_variable: check_result
+      continue_on_error: true
+    - if: "{{ check_result is not defined or check_result['returncode'] != 0 }}"
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: valetudo_robot_certificate_monitor
+            title: Valetudo served HTTPS certificate needs attention
+            message: The served certificate is invalid, unreachable, or expires within 14 days.
+      else:
+        - action: persistent_notification.dismiss
+          data:
+            notification_id: valetudo_robot_certificate_monitor
   mode: single
