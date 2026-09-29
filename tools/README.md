@@ -51,7 +51,7 @@ It checks the same preconditions and leaves the same `/data/valetudo.predeploy_<
 | `camera_checks.sh` | Idle stop, cold wake, pause and resume through Valetudo, crash and stall recovery while an RTSP viewer watches |
 | `migrate_ha_https.py SOURCE OUTPUT` | Prepare a mode-0600 Home Assistant config with exactly 25 commands and 16 sensors moved to verified HTTPS |
 | `profiles.sh PREFIX` | Docked 10-minute profiles: nobody watching, an RTSP viewer, and `CAMERA_MODE=always`; restores the original mode |
-| `compare_profiles.py RUNS` | Applies the CLAUDE.md gates against the 2026-07-25 baselines |
+| `compare_profiles.py RUNS` | Applies the CLAUDE.md gates against the tunnelled 2026-09-28 `certtx0928` baselines (the direct-LAN 2026-07-25 runs remain available through `--base-on`/`--base-off`) |
 | `integration_local.sh` | Mac-only end-to-end test of the camera scripts with a local go2rtc and ffmpeg standing in for `video_monitor` |
 
 ## Valetudo login
