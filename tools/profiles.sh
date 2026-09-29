@@ -14,11 +14,12 @@ PREFIX="${1:?usage: profiles.sh LABEL_PREFIX [DURATION_SECONDS]}"
 DURATION="${2:-600}"
 check_id "$PREFIX"
 MIN_UPTIME="${MIN_UPTIME:-1440}"
-RTSP="rtsp://$VACUUM_IP:8554/vacuum"
+RTSP=""
 RUNS="$WORK_DIR/profiles_$PREFIX.txt"
 VIEWER=""
 TUNNEL=""
 HTTP_PORT=""
+RTSP_PORT=""
 ORIGINAL_MODE=""
 
 set_mode() {
@@ -44,9 +45,16 @@ run_profile() { # SCENARIO
 }
 
 valetudo_auth_preflight || fail "Valetudo authentication preflight failed"
-HTTP_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()') || fail "cannot allocate HTTP tunnel port"
+free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'; }
+HTTP_PORT=$(free_port) || fail "cannot allocate HTTP tunnel port"
+RTSP_PORT=$(free_port) || fail "cannot allocate RTSP tunnel port"
+# Both forwards end on the robot's loopback: Valetudo gets its login over SSH,
+# and go2rtc does not challenge robot-local RTSP, so no camera credential is
+# ever placed in an ffmpeg URL (CAMERA_LOGIN=on). Tunnelled viewer and HTTP
+# traffic add dropbear CPU, so compare only with baselines taken the same way.
+RTSP="rtsp://127.0.0.1:$RTSP_PORT/vacuum"
 ssh -N -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=8 -o ExitOnForwardFailure=yes \
-    -L "127.0.0.1:$HTTP_PORT:127.0.0.1:80" "$VACUUM_SSH" > /dev/null 2>&1 &
+    -L "127.0.0.1:$HTTP_PORT:127.0.0.1:80" -L "127.0.0.1:$RTSP_PORT:127.0.0.1:8554" "$VACUUM_SSH" > /dev/null 2>&1 &
 TUNNEL=$!
 sleep 1
 kill -0 "$TUNNEL" 2>/dev/null || fail "HTTP tunnel did not start"
