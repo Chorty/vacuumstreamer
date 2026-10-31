@@ -77,6 +77,19 @@ As of 2026-09-26, the robot name resolves to `192.168.1.31` from public and LAN 
 
 This route encrypts HA's REST requests. Since PR #15 the Mac deployment tools send Basic Auth only to the robot's loopback, through SSH, and `profiles.sh` gives the profiler a robot-terminated SSH tunnel. Parent PR #24 makes MCP require verified HTTPS or such a tunnel. The Caddy allowlist still admits only HA and robot localhost. `camera_checks.sh` uses an SSH-local RTSP tunnel so ffmpeg receives a credential-free URL.
 
+## First real certificate renewal
+
+Copy `ha_https_renewal_acceptance.py` to `/config/valetudo_https_renewal_acceptance.py`
+at mode 0700, beside the existing certificate-sync Python helper. Run it once
+with `init` while the current certificate is served. This creates a private,
+exclusive baseline state file; it refuses to overwrite an existing baseline.
+Add the matching shell command and 03:10 automation from `ha_https_automations.yaml`.
+The check records a changed fingerprint only after the existing verifier checks
+the exact served leaf, trust, hostname, expiry and HTTPS API response. It notifies
+the owner when a real renewed leaf is accepted and preserves the previous state
+on failure. It does not force renewal or replace certificates. Tests run with
+`python3 test/ha_renewal_acceptance_test.py`.
+
 ## Requirements
 
 - Mac: `ssh vacuum` configured, Python 3, `shasum`, `ffmpeg` and `ffprobe` for camera tools, `lsof` for `integration_local.sh`
