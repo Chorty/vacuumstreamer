@@ -4,6 +4,7 @@
 # shell_command:
 #   valetudo_https_cert_sync: /config/valetudo_https_cert_sync.sh
 #   valetudo_https_cert_check: /config/valetudo_https_cert_sync.sh check
+#   valetudo_https_renewal_acceptance: python3 /config/valetudo_https_renewal_acceptance.py
 
 - id: valetudo_robot_certificate_renewal_check
   alias: Valetudo robot certificate renewal check
@@ -39,6 +40,40 @@
         - action: persistent_notification.dismiss
           data:
             notification_id: valetudo_robot_certificate_install
+  mode: single
+
+# Install the acceptance helper beside ha_https_cert_sync.py and run it once
+# with "init" while the current, already-verified leaf is served.
+- id: valetudo_robot_certificate_renewal_acceptance
+  alias: Valetudo robot certificate renewal acceptance
+  triggers:
+    - trigger: time
+      at: "03:10:00"
+  actions:
+    - action: shell_command.valetudo_https_renewal_acceptance
+      response_variable: acceptance_result
+      continue_on_error: true
+    - if: "{{ acceptance_result is not defined or acceptance_result['returncode'] != 0 }}"
+      then:
+        - action: persistent_notification.create
+          data:
+            notification_id: valetudo_robot_certificate_renewal_acceptance_failed
+            title: Valetudo certificate renewal verification failed
+            message: The certificate on Home Assistant could not be verified as the exact trusted leaf served by the robot.
+      else:
+        - action: persistent_notification.dismiss
+          data:
+            notification_id: valetudo_robot_certificate_renewal_acceptance_failed
+        - if: "{{ (acceptance_result['stdout'] | from_json)['newly_verified'] }}"
+          then:
+            - action: persistent_notification.create
+              data:
+                notification_id: valetudo_robot_certificate_renewal_accepted
+                title: Valetudo certificate renewal verified
+                message: >-
+                  Home Assistant verified the renewed certificate's trust,
+                  hostname, expiry, exact served leaf and HTTPS API response.
+                  Fingerprint: {{ (acceptance_result['stdout'] | from_json)['fingerprint'] }}.
   mode: single
 
 # Independent of issuance/install: check the certificate actually served, even
