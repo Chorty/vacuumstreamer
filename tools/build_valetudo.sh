@@ -34,8 +34,8 @@ step openapi npm run build_openapi_schema
 step generate_code npm run generate_code --workspace=backend
 step lint npm run lint_all
 step ts_check npm run ts-check_all
-step test npm test --workspace=backend
 step frontend npm run build --workspace=frontend
+step test npm test --workspace=backend
 BEFORE=$(wc -l < "$TOOL_LOG" | tr -d " ")
 step aarch64 npm run build_aarch64 --workspace=backend
 
@@ -59,7 +59,7 @@ if [ -n "$PKG" ]; then
         echo "Built: $(date '+%F %T %Z') by tools/build_valetudo.sh"
         echo "Source: clean clone detached at $COMMIT"
         echo "Plugin: $(git -C vacuumstreamer-plugin rev-parse HEAD)"
-        echo "Steps: npm ci; build_openapi_schema; generate_code; lint_all; ts-check_all; backend tests; frontend build; build_aarch64"
+        echo "Steps: npm ci; build_openapi_schema; generate_code; lint_all; ts-check_all; frontend build; backend tests; build_aarch64"
         echo "Embedded metadata: $META"
         echo "Artifact SHA-256: $SHA"
         echo "Architecture: $(file -b "$A")"
