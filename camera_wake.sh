@@ -33,6 +33,11 @@ mkdir -p "$VS_RUN_DIR"
         sleep 0.2
     done
 
+    # Reserve an idle period before starting the camera. The supervisor can
+    # run before port 6969 opens and otherwise stop this new process using
+    # the previous viewer's stale activity time.
+    vs_state_set camera_last_wake "$(vs_now)"
+
     if ! vs_running video_monitor; then
         vs_log "camera wake: starting video_monitor"
         vs_start_detached "$VS_DIR/video_monitor_launch.sh"
