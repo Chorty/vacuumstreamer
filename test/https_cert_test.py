@@ -67,8 +67,11 @@ class InstallerTests(unittest.TestCase):
                                  ('new','mattjoslin-valetudo.duckdns.org',40),
                                  ('wrong','wrong.example',30),
                                  ('short','mattjoslin-valetudo.duckdns.org',1)]:
+            # Each self-signed trust anchor needs a distinct subject. OpenSSL
+            # may otherwise select another fixture with the same subject and
+            # a different key. Hostname verification still uses the SAN.
             subprocess.run([OPENSSL,'req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256',
-                            '-nodes','-days',str(days),'-subj','/CN='+host,'-addext','subjectAltName=DNS:'+host,
+                            '-nodes','-days',str(days),'-subj','/CN='+name+'.'+host,'-addext','subjectAltName=DNS:'+host,
                             '-keyout',str(cls.fixtures/(name+'.key')),'-out',str(cls.fixtures/(name+'.pem'))],
                            check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 

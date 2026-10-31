@@ -598,6 +598,25 @@ check "wake: starts video_monitor" "yes" "$(exists "$VS_STATE/running_video_moni
 check "wake: records the wake time" "yes" "$(exists "$VS_RUN_DIR/camera_last_wake")"
 
 new_case
+set_run_state camera_last_active 0
+set_run_state camera_last_wake 0
+touch "$VS_STATE/running_go2rtc"
+# Run an idle-supervisor check during startup, before the camera port opens.
+# The killall stub removes the running marker, letting us detect an early stop.
+cat > "$VS_DIR/video_monitor" <<'EOF'
+#!/bin/sh
+touch "$VS_STATE/running_video_monitor"
+"$VS_TEST_SH" "$VS_DIR/camera_supervisor.sh" --once
+touch "$VS_STATE/listening"
+EOF
+chmod 755 "$VS_DIR/video_monitor"
+OUT=$(VS_TEST_SH="$TEST_SH" VS_FAKE_NOW=1000 $TEST_SH "$VS_DIR/camera_wake.sh" 2>/dev/null)
+STATUS=$?
+check "cold wake: succeeds when the idle supervisor checks during startup" "0" "$STATUS"
+check "cold wake: supervisor leaves the starting camera running" "yes" "$(exists "$VS_STATE/running_video_monitor")"
+lacks "cold wake: no idle stop before the first connection" "killall video_monitor" "$(calls)"
+
+new_case
 touch "$VS_STATE/running_video_monitor" "$VS_STATE/listening"
 OUT=$($TEST_SH "$VS_DIR/camera_wake.sh" 2>/dev/null)
 check "wake with video_monitor running: prints the address" "tcp://127.0.0.1:6969" "$OUT"
