@@ -1458,6 +1458,18 @@ check "shim: a loopback listener counts as listening, without a viewer" "yes no"
 check "shim: the reboot gate's rollback list includes the shim" "1" "$(WORK_DIR="$SHIM_T/work" bash -c ". '$REPO/tools/lib.sh'; native_deployed_paths" | grep -c '^/data/vacuumstreamer/vacuumstreamer\.so$')"
 check "shim: install_shim.sh pins a full SHA-256" "1" "$(grep -cE '^EXPECTED=[0-9a-f]{64}$' "$REPO/tools/install_shim.sh")"
 
+# Tools are run by path, so a missing executable bit stops a deployment midway.
+# Everything else must be executable: lib.sh and reboot_gate_functions.sh are
+# sourced, binary_gate.sh runs on the robot, and ha_https_cert_sync.sh on HA.
+NOT_EXECUTABLE=""
+for tool in "$REPO"/tools/*.sh; do
+    case "$(basename "$tool")" in
+        lib.sh | reboot_gate_functions.sh | binary_gate.sh | ha_https_cert_sync.sh) continue ;;
+    esac
+    [ -x "$tool" ] || NOT_EXECUTABLE="$NOT_EXECUTABLE $(basename "$tool")"
+done
+check "tools: every tool run by path is executable" "" "$NOT_EXECUTABLE"
+
 # Run the real tools against a stand-in robot: a temporary tree the remote
 # commands are rewritten to use. Only the pin and the robot transport differ.
 SHIM_SO="$SHIM_T/new.so"
