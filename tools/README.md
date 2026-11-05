@@ -22,7 +22,10 @@ tools/deploy_binary.sh "$PKG/artifact_<short>/valetudo-aarch64" <deploy-id> "$PK
 # 3. Native runtime scripts from a committed native revision
 tools/deploy_native.sh <native-commit> <deploy-id>
 
-# 4. Reboot, gate again, and restore the binary and preserved native files on failure
+# 4. Only when vacuumstreamer.c changed: the pinned capture shim
+tools/install_shim.sh "$PKG/shim_<native-short>/vacuumstreamer.so" <deploy-id>
+
+# 5. Reboot, gate again, and restore the binary and preserved native files on failure
 tools/deploy_reboot_gate.sh <artifact-sha256> <valetudo-commit> <deploy-id>
 ```
 
@@ -34,7 +37,22 @@ For a native-only change, run the backups and `seal_package.sh` as usual (skip `
 tools/deploy_keep_binary.sh <deploy-id> "$PKG"
 ```
 
-It checks the same preconditions and leaves the same `/data/valetudo.predeploy_<id>` copy and markers as `deploy_binary.sh`, without touching `/data/valetudo`. Then run `deploy_native.sh`. A script that runs only per request (such as `mic_gain_ctl.sh`) takes effect immediately; verify it over REST. A long-running script (the supervisor, launchers, boot script) or `go2rtc.yaml` takes effect only after a reboot, so run `deploy_reboot_gate.sh` with the active binary's SHA-256 and running Valetudo commit. The deploy ID names the on-robot rollback copies: `/data/valetudo.predeploy_<id>`, `/data/_root_postboot.sh.predeploy_<id>` and `/data/vacuumstreamer/go2rtc.yaml.predeploy_<id>`.
+It checks the same preconditions and leaves the same `/data/valetudo.predeploy_<id>` copy and markers as `deploy_binary.sh`, without touching `/data/valetudo`. Then run `deploy_native.sh`. A script that runs only per request (such as `mic_gain_ctl.sh`) takes effect immediately; verify it over REST. A long-running script (the supervisor, launchers, boot script) or `go2rtc.yaml` takes effect only after a reboot, so run `deploy_reboot_gate.sh` with the active binary's SHA-256 and running Valetudo commit. The deploy ID names the on-robot rollback copies: `/data/valetudo.predeploy_<id>`, `/data/_root_postboot.sh.predeploy_<id>`, `/data/vacuumstreamer/go2rtc.yaml.predeploy_<id>` and `/data/vacuumstreamer/vacuumstreamer.so.predeploy_<id>`.
+
+### Capture shim
+
+`deploy_native.sh` exports tracked files, and `*.so` is gitignored, so it never installs `vacuumstreamer.so`. `install_shim.sh` does, after the native stage. It accepts only the build pinned in its `EXPECTED` line, so a change to `vacuumstreamer.c` must update that line in the same commit.
+
+Build from a clean export of the commit, in the image from the repository's `Dockerfile`:
+
+```bash
+git archive <commit> | tar -x -C "$BUILD_DIR"
+docker run --rm --network none -v "$BUILD_DIR":/workspace <image> make
+```
+
+`Dockerfile` uses `debian:latest`, so a later image can produce a different file. Debian 13.7 with clang 19.1.7 reproduced the shim deployed since March 2026 byte for byte from its source, so that toolchain is the one to compare against. If a rebuild of unchanged source no longer matches, compare the two builds before trusting the new one.
+
+`install_shim.sh` uploads the candidate, checks its hash, and refuses it if the robot's loader prints anything when preloading it, because `ld.so` exits 0 for a preload it cannot use. Activation is an atomic `mv`, and the new shim is first used after the reboot. The reboot gate checks the shim's hash and restores the preserved copy on failure, but it does not wake the camera. After it passes, wake the camera and decode a sample. If that fails, restore `vacuumstreamer.so.predeploy_<id>` by hand and reboot.
 
 | Tool | Purpose |
 |---|---|
@@ -47,6 +65,7 @@ It checks the same preconditions and leaves the same `/data/valetudo.predeploy_<
 | `deploy_keep_binary.sh ID PKG` | Native-only stage 1: keeps the active binary, preserves it as the rollback copy and writes the markers the later stages need |
 | `deploy_native.sh COMMIT ID` | Installs native runtime files from a commit with hash and BusyBox syntax checks |
 | `deploy_reboot_gate.sh SHA COMMIT ID` | Reboot, 12 consecutive health checks, full rollback and second reboot on failure |
+| `install_shim.sh SO ID` | Install the pinned build of `vacuumstreamer.so` with a hash check, a loader check, a rollback copy and an atomic swap |
 | `install_caddy.sh CADDY ID` | Install the pinned official Caddy v2.11.4 ARM64 binary without enabling HTTPS |
 | `camera_checks.sh` | Idle stop, cold wake, pause and resume through Valetudo, crash and stall recovery while an RTSP viewer watches |
 | `migrate_ha_https.py SOURCE OUTPUT` | Prepare a mode-0600 Home Assistant config with exactly 25 commands and 16 sensors moved to verified HTTPS |
@@ -93,6 +112,7 @@ on failure. It does not force renewal or replace certificates. Tests run with
 ## Requirements
 
 - Mac: `ssh vacuum` configured, Python 3, `shasum`, `ffmpeg` and `ffprobe` for camera tools, `lsof` for `integration_local.sh`
+- `vacuumstreamer.so`: Docker and the image built from `Dockerfile`
 - `build_valetudo.sh`: the Valetudo checkout with `build_dependencies/pkg`, and plugin commits reachable in its local plugin repository
 - `integration_local.sh`: a go2rtc binary for macOS in `GO2RTC_BIN`, for example built from the `v1.9.9` tag with `go build`
 
