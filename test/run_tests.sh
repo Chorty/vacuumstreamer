@@ -1437,6 +1437,167 @@ check "reboot gate: HTTPS off ignores TLS" 0 "$(healthy_case off no)"
 check "reboot gate: verified HTTPS passes" 0 "$(healthy_case on yes)"
 check "reboot gate: invalid HTTPS certificate fails" 1 "$(healthy_case on no)"
 
+# --- Capture shim ---
+
+# The capture port takes loopback connections only; go2rtc reads it through
+# camera_wake.sh's tcp://127.0.0.1 address.
+check "shim source: the capture port binds to loopback" "1" "$(grep -c 'htonl(INADDR_LOOPBACK)' "$REPO/vacuumstreamer.c")"
+check "shim source: nothing binds to every interface" "0" "$(grep -c 'INADDR_ANY' "$REPO/vacuumstreamer.c")"
+check "shim source: the wake script returns the loopback address" "1" "$(grep -c 'tcp://127.0.0.1:\$VS_CAMERA_PORT' "$REPO/camera_wake.sh")"
+
+# The supervisor and wake script must see a listener bound to loopback.
+SHIM_T="$TMP_ROOT/shim"
+mkdir -p "$SHIM_T"
+cat > "$SHIM_T/tcp" <<'EOF'
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:1B39 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 101
+EOF
+OUT=$(VS_PROC_NET_TCP="$SHIM_T/tcp" VS_DIR="$REPO" $TEST_SH -c '. "$VS_DIR/vacuumstreamer_lib.sh"; vs_tcp_port_state 6969; echo "$VS_PORT_LISTENING $VS_PORT_CONNECTED"')
+check "shim: a loopback listener counts as listening, without a viewer" "yes no" "$OUT"
+
+check "shim: the reboot gate's rollback list includes the shim" "1" "$(WORK_DIR="$SHIM_T/work" bash -c ". '$REPO/tools/lib.sh'; native_deployed_paths" | grep -c '^/data/vacuumstreamer/vacuumstreamer\.so$')"
+check "shim: install_shim.sh pins a full SHA-256" "1" "$(grep -cE '^EXPECTED=[0-9a-f]{64}$' "$REPO/tools/install_shim.sh")"
+
+# Run the real tools against a stand-in robot: a temporary tree the remote
+# commands are rewritten to use. Only the pin and the robot transport differ.
+SHIM_SO="$SHIM_T/new.so"
+printf 'new shim\n' > "$SHIM_SO"
+SHIM_NEW_SHA=$(shasum -a 256 "$SHIM_SO" | cut -d' ' -f1)
+SHIM_OLD_SHA=$(printf 'old shim\n' | shasum -a 256 | cut -d' ' -f1)
+SHIM_VALETUDO_NEW=$(printf 'new binary\n' | shasum -a 256 | cut -d' ' -f1)
+SHIM_VALETUDO_OLD=$(printf 'old binary\n' | shasum -a 256 | cut -d' ' -f1)
+mkdir -p "$SHIM_T/bin"
+cat > "$SHIM_T/bin/sha256sum" <<'STUB'
+#!/bin/sh
+[ -f "$1" ] || exit 1
+shasum -a 256 "$1"
+STUB
+cat > "$SHIM_T/bin/true_stub" <<'STUB'
+#!/bin/sh
+[ -f "$SHIM_ROBOT/loader_output" ] && cat "$SHIM_ROBOT/loader_output"
+exit 0
+STUB
+chmod 755 "$SHIM_T/bin/"*
+
+# shim_tools DIR - copy the tools, pin the fixture, and replace the robot transport.
+shim_tools() {
+    mkdir -p "$1"
+    cp "$REPO/tools/lib.sh" "$REPO/tools/deploy_reboot_gate.sh" "$1/"
+    sed "s/^EXPECTED=[0-9a-f]\{64\}$/EXPECTED=$SHIM_NEW_SHA/" "$REPO/tools/install_shim.sh" > "$1/install_shim.sh"
+    cat >> "$1/lib.sh" <<'STUB'
+shim_remote() { printf '%s' "$1" | sed -e "s#/data/#$SHIM_ROBOT/data/#g" -e "s#/bin/true#$SHIM_BIN/true_stub#g"; }
+rsh() { "$TEST_SH" -c "$(shim_remote "$1")"; }
+rsh_n() { "$TEST_SH" -c "$(shim_remote "$1")" < /dev/null; }
+valetudo_auth_preflight() { :; }
+robot_docked_idle_cached() { :; }
+remote_vcurl_cached() { echo "$SHIM_RUNNING_COMMIT"; }
+camera_status() { :; }
+STUB
+    cat > "$1/reboot_gate_functions.sh" <<'STUB'
+reboot_and_wait() { echo reboot >> "$SHIM_ROBOT/reboots"; }
+gate() { [ "$1" != new_healthy ] || [ "$SHIM_GATE" = pass ]; }
+STUB
+    chmod 755 "$1/"*
+}
+
+# shim_robot NAME - a stand-in robot with the old files and a passed native stage.
+shim_robot() {
+    SHIM_ROBOT="$SHIM_T/$1"
+    SHIM_WORK="$SHIM_T/$1.work"
+    mkdir -p "$SHIM_ROBOT/data/vacuumstreamer" "$SHIM_WORK"
+    printf 'old shim\n' > "$SHIM_ROBOT/data/vacuumstreamer/vacuumstreamer.so"
+    printf 'old shim\n' > "$SHIM_ROBOT/data/vacuumstreamer/vacuumstreamer.so.predeploy_t1"
+    printf 'old binary\n' > "$SHIM_ROBOT/data/valetudo.predeploy_t1"
+    printf 'new binary\n' > "$SHIM_ROBOT/data/valetudo"
+    echo native > "$SHIM_WORK/deploy_t1.native_installed"
+    echo "$SHIM_VALETUDO_OLD" > "$SHIM_WORK/deploy_t1.previous_sha"
+}
+
+shim_run() { # TOOL ARGS...
+    local tool="$1"
+    shift
+    SHIM_ROBOT="$SHIM_ROBOT" SHIM_BIN="$SHIM_T/bin" SHIM_GATE="${SHIM_GATE:-pass}" SHIM_RUNNING_COMMIT="${SHIM_RUNNING_COMMIT:-abc123}" \
+        WORK_DIR="$SHIM_WORK" TEST_SH="$TEST_SH" PATH="$SHIM_T/bin:$PATH" bash "$SHIM_T/tools/$tool" "$@" > "$SHIM_ROBOT/output" 2>&1
+    echo $?
+}
+
+shim_active() { cat "$SHIM_ROBOT/data/vacuumstreamer/vacuumstreamer.so"; }
+
+shim_tools "$SHIM_T/tools"
+
+shim_robot wrong_hash
+printf 'tampered shim\n' > "$SHIM_T/tampered.so"
+check "install_shim: a different build is refused" "1" "$(shim_run install_shim.sh "$SHIM_T/tampered.so" t1)"
+check "install_shim: a refused build leaves the active shim" "old shim" "$(shim_active)"
+check "install_shim: a refused build uploads nothing" "no" "$(exists "$SHIM_ROBOT/data/vacuumstreamer/vacuumstreamer.so.new_t1")"
+
+shim_robot no_native
+rm -f "$SHIM_WORK/deploy_t1.native_installed"
+check "install_shim: refused before the native stage" "1" "$(shim_run install_shim.sh "$SHIM_SO" t1)"
+check "install_shim: the refusal names the native stage" "yes" "$(grep -q 'native stage' "$SHIM_ROBOT/output" && echo yes || echo no)"
+check "install_shim: refused before the native stage leaves the active shim" "old shim" "$(shim_active)"
+
+shim_robot bad_id
+check "install_shim: an unsafe deploy ID is refused" "1" "$(shim_run install_shim.sh "$SHIM_SO" 'x;y')"
+
+shim_robot loader
+printf "ERROR: ld.so: object 'x' from LD_PRELOAD cannot be preloaded (invalid ELF header): ignored.\n" > "$SHIM_ROBOT/loader_output"
+check "install_shim: loader output fails the stage even with status 0" "1" "$(shim_run install_shim.sh "$SHIM_SO" t1)"
+check "install_shim: a rejected shim is not activated" "old shim" "$(shim_active)"
+check "install_shim: a rejected candidate is removed" "no" "$(exists "$SHIM_ROBOT/data/vacuumstreamer/vacuumstreamer.so.new_t1")"
+check "install_shim: a rejected shim writes no marker" "no" "$(exists "$SHIM_WORK/deploy_t1.shim_installed")"
+
+shim_robot install
+rm -f "$SHIM_ROBOT/data/vacuumstreamer/vacuumstreamer.so.predeploy_t1"
+check "install_shim: installs the pinned build" "0" "$(shim_run install_shim.sh "$SHIM_SO" t1)"
+check "install_shim: the pinned build is active" "new shim" "$(shim_active)"
+check "install_shim: it preserves the old shim when the native stage did not" "old shim" "$(cat "$SHIM_ROBOT/data/vacuumstreamer/vacuumstreamer.so.predeploy_t1")"
+check "install_shim: no candidate is left behind" "no" "$(exists "$SHIM_ROBOT/data/vacuumstreamer/vacuumstreamer.so.new_t1")"
+check "install_shim: the marker names the new hash" "$SHIM_NEW_SHA" "$(cat "$SHIM_WORK/deploy_t1.shim_installed")"
+check "install_shim: the marker names the old hash" "$SHIM_OLD_SHA" "$(cat "$SHIM_WORK/deploy_t1.shim_previous_sha")"
+check "install_shim: the shim is executable" "yes" "$([ -x "$SHIM_ROBOT/data/vacuumstreamer/vacuumstreamer.so" ] && echo yes || echo no)"
+check "install_shim: a repeat run succeeds" "0" "$(shim_run install_shim.sh "$SHIM_SO" t1)"
+check "install_shim: a repeat run keeps the old rollback copy" "old shim" "$(cat "$SHIM_ROBOT/data/vacuumstreamer/vacuumstreamer.so.predeploy_t1")"
+check "install_shim: a repeat run keeps the old hash" "$SHIM_OLD_SHA" "$(cat "$SHIM_WORK/deploy_t1.shim_previous_sha")"
+
+shim_robot mismatch_copy
+printf 'unrelated\n' > "$SHIM_ROBOT/data/vacuumstreamer/vacuumstreamer.so.predeploy_t1"
+check "install_shim: a rollback copy of something else is refused" "1" "$(shim_run install_shim.sh "$SHIM_SO" t1)"
+check "install_shim: that refusal leaves the active shim" "old shim" "$(shim_active)"
+
+# The reboot gate: pass, wrong shim after the reboot, and a failed health gate.
+shim_gate_robot() {
+    shim_robot "$1"
+    shim_run install_shim.sh "$SHIM_SO" t1 > /dev/null
+}
+shim_gate_rolled_back() {
+    check "$1: exit status" "1" "$2"
+    check "$1: the old shim is restored" "old shim" "$(shim_active)"
+    check "$1: the old binary is restored" "old binary" "$(cat "$SHIM_ROBOT/data/valetudo")"
+    check "$1: it rebooted again" "2" "$(wc -l < "$SHIM_ROBOT/reboots" | tr -d ' ')"
+    check "$1: the gate does not record a pass" "no" "$(exists "$SHIM_WORK/deploy_t1.reboot_passed")"
+    check "$1: it reports the rollback" "yes" "$(grep -q 'DONE rolled back' "$SHIM_ROBOT/output" && echo yes || echo no)"
+}
+
+shim_gate_robot gate_pass
+check "reboot gate with shim: passes when every hash matches" "0" "$(shim_run deploy_reboot_gate.sh "$SHIM_VALETUDO_NEW" abc123 t1)"
+check "reboot gate with shim: the pinned shim stays active" "new shim" "$(shim_active)"
+check "reboot gate with shim: records the pass" "yes" "$(exists "$SHIM_WORK/deploy_t1.reboot_passed")"
+
+shim_gate_robot gate_wrong_shim
+printf 'other shim\n' > "$SHIM_ROBOT/data/vacuumstreamer/vacuumstreamer.so"
+STATUS=$(shim_run deploy_reboot_gate.sh "$SHIM_VALETUDO_NEW" abc123 t1)
+shim_gate_rolled_back "reboot gate with a wrong shim" "$STATUS"
+
+shim_gate_robot gate_unhealthy
+STATUS=$(SHIM_GATE=fail shim_run deploy_reboot_gate.sh "$SHIM_VALETUDO_NEW" abc123 t1)
+shim_gate_rolled_back "reboot gate unhealthy" "$STATUS"
+
+# A deployment with no shim stage must ignore the shim's hash.
+shim_robot gate_no_shim_stage
+printf 'other shim\n' > "$SHIM_ROBOT/data/vacuumstreamer/vacuumstreamer.so"
+check "reboot gate without a shim stage: ignores the shim" "0" "$(shim_run deploy_reboot_gate.sh "$SHIM_VALETUDO_NEW" abc123 t1)"
+
 # Isolated real-OpenSSL installer/HA tests (no device or network operations).
 python3 "$REPO/test/https_cert_test.py" "$TEST_SH"
 check "HTTPS transaction suite" "0" "$?"

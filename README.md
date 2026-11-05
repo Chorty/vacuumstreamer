@@ -26,7 +26,7 @@ Tested on: Dreame L10s Ultra and L10S Pro Ultra Heat (Allwinner MR813/sun50iw10,
 ## Architecture
 
 ```
-video_monitor → vacuumstreamer.so (LD_PRELOAD) → TCP :6969 → go2rtc → WebRTC/RTSP
+video_monitor → vacuumstreamer.so (LD_PRELOAD) → TCP 127.0.0.1:6969 → go2rtc → WebRTC/RTSP
                                                                ↑
                                                     arecord (mic audio)
                                                                ↓ backchannel
@@ -45,7 +45,7 @@ docker build -t vacuumstreamer .
 ./run.sh make
 ```
 
-This cross-compiles `vacuumstreamer.so` for aarch64 using clang.
+This cross-compiles `vacuumstreamer.so` for aarch64 using clang. To deploy a rebuilt shim on a maintained robot, see "Capture shim" in [tools/README.md](tools/README.md).
 
 ## Install
 
@@ -328,7 +328,7 @@ and video automation loop guards remain in place.
 
 | File | Description |
 |---|---|
-| `vacuumstreamer.c` | LD_PRELOAD hook — intercepts Agora RTC calls, redirects H.264 video to TCP :6969 |
+| `vacuumstreamer.c` | LD_PRELOAD hook — intercepts Agora RTC calls, redirects H.264 video to TCP 127.0.0.1:6969 |
 | `vacuumstreamer.so` | Compiled shared library (aarch64) |
 | `go2rtc.yaml` | go2rtc configuration — streams, RTSP, WebRTC, backchannel |
 | `play_pcm.sh` | WebRTC backchannel handler — pipes PCM audio to `aplay` |
