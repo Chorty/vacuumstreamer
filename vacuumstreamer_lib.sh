@@ -15,12 +15,44 @@ VS_CAMERA_PORT="${VS_CAMERA_PORT:-6969}"
 VS_GO2RTC_API="${VS_GO2RTC_API:-http://127.0.0.1:1984}"
 VS_UPTIME_FILE="${VS_UPTIME_FILE:-/proc/uptime}"
 VS_PROC_NET_TCP="${VS_PROC_NET_TCP:-/proc/net/tcp}"
+VS_IPV6_DISABLE="${VS_IPV6_DISABLE:-/proc/sys/net/ipv6/conf/wlan0/disable_ipv6}"
 
 # Space, tab and carriage return, for trimming with shell builtins
 VS_BLANKS=" $(printf '\t\r')"
 
 vs_log() {
     echo "$(date '+%Y-%m-%dT%H:%M:%S') $*" >> "$VS_LOG" 2>/dev/null
+}
+
+# vs_lan_ipv6_off - turn IPv6 off on wlan0. Starts no process when it's already off.
+vs_lan_ipv6_off() {
+    local value=""
+    [ -r "$VS_IPV6_DISABLE" ] || return 0
+    read -r value < "$VS_IPV6_DISABLE"
+    [ "$value" = 1 ] && return 0
+    echo 1 > "$VS_IPV6_DISABLE" && vs_log "lan firewall: turned IPv6 off on wlan0"
+}
+
+# vs_lan_firewall_add ARGS... - insert an INPUT rule unless it is already there.
+vs_lan_firewall_add() {
+    iptables -C INPUT "$@" 2>/dev/null && return 0
+    iptables -I INPUT "$@" && vs_log "lan firewall: added $*"
+}
+
+# vs_lan_firewall_apply BLOCK_HTTP - drop inbound UDP 54321 on wlan0, and TCP 80
+# when BLOCK_HTTP is on. The firmware sets INPUT to DROP while it runs its own
+# firewall on a hidden network, and that needs 54321, so leave any other policy
+# alone. Starts one to three iptables processes.
+vs_lan_firewall_apply() {
+    local rules
+    rules=$(iptables -S INPUT 2>/dev/null) || return 1
+    case "$rules" in
+        "-P INPUT ACCEPT"*) ;;
+        *) return 0 ;;
+    esac
+    vs_lan_firewall_add -i wlan0 -p udp --dport 54321 -j DROP
+    [ "$1" = on ] || return 0
+    vs_lan_firewall_add -i wlan0 -p tcp --dport 80 -j DROP
 }
 
 # vs_conf_get KEY DEFAULT - print the last value set for KEY, or DEFAULT.

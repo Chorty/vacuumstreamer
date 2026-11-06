@@ -1174,6 +1174,141 @@ for script in mic_gain_ctl.sh recorder_quality_ctl.sh camera_ctl.sh; do
     esac
 done
 
+# --- LAN firewall ---
+
+firewall_stub() {
+    cat > "$VS_DIR/bin/iptables" <<'STUB'
+#!/bin/sh
+RULES="$VS_STATE/iptables_rules"
+case "$1" in
+    -S)
+        [ -e "$VS_STATE/iptables_broken" ] && exit 1
+        echo "-P INPUT $(cat "$VS_STATE/iptables_policy" 2>/dev/null || echo ACCEPT)"
+        ;;
+    -C) shift 2; grep -qxF -- "$*" "$RULES" 2>/dev/null ;;
+    -I) shift 2; echo "$*" >> "$RULES"; echo inserted >> "$VS_STATE/iptables_inserts" ;;
+    *) exit 2 ;;
+esac
+STUB
+    chmod 755 "$VS_DIR/bin/iptables"
+    PATH="$VS_DIR/bin:$ORIGINAL_PATH"; export PATH
+}
+firewall_rules() { cat "$VS_STATE/iptables_rules" 2>/dev/null; }
+firewall_inserts() { wc -l < "$VS_STATE/iptables_inserts" 2>/dev/null | tr -d ' '; }
+FW_UDP="-i wlan0 -p udp --dport 54321 -j DROP"
+FW_TCP="-i wlan0 -p tcp --dport 80 -j DROP"
+
+new_case
+firewall_stub
+lib vs_lan_firewall_apply on
+check "firewall: drops both ports with HTTPS on" "$(printf '%s\n%s' "$FW_UDP" "$FW_TCP")" "$(firewall_rules)"
+lib vs_lan_firewall_apply on
+check "firewall: a repeat check adds nothing" "2" "$(firewall_inserts)"
+rm -f "$VS_STATE/iptables_rules"
+lib vs_lan_firewall_apply on
+check "firewall: rules come back after the firmware flushes them" "$(printf '%s\n%s' "$FW_UDP" "$FW_TCP")" "$(firewall_rules)"
+
+new_case
+firewall_stub
+lib vs_lan_firewall_apply off
+check "firewall: port 80 stays open without HTTPS" "$FW_UDP" "$(firewall_rules)"
+
+new_case
+firewall_stub
+echo DROP > "$VS_STATE/iptables_policy"
+lib vs_lan_firewall_apply on
+check "firewall: the firmware's own firewall is left alone" "" "$(firewall_rules)"
+
+new_case
+firewall_stub
+touch "$VS_STATE/iptables_broken"
+lib vs_lan_firewall_apply on
+check "firewall: a failing iptables reports failure" "1" "$?"
+check "firewall: a failing iptables adds nothing" "" "$(firewall_rules)"
+
+new_case
+check "firewall: boot leaves it off by default" "no" "$(boot_actions | grep -q 'lan_firewall.sh' && echo yes || echo no)"
+set_conf "LAN_FIREWALL=on"
+check "firewall: boot starts it when switched on" "yes" "$(boot_actions | grep -q 'background: .*lan_firewall.sh' && echo yes || echo no)"
+
+new_case
+IPV6_FILE="$VS_STATE/disable_ipv6"
+echo 0 > "$IPV6_FILE"
+VS_IPV6_DISABLE="$IPV6_FILE" lib vs_lan_ipv6_off
+check "firewall: IPv6 is turned off on wlan0" "1" "$(cat "$IPV6_FILE")"
+check "firewall: turning IPv6 off is logged" "1" "$(grep -c 'turned IPv6 off' "$VS_LOG" 2>/dev/null)"
+VS_IPV6_DISABLE="$IPV6_FILE" lib vs_lan_ipv6_off
+check "firewall: IPv6 already off logs nothing more" "1" "$(grep -c 'turned IPv6 off' "$VS_LOG" 2>/dev/null)"
+VS_IPV6_DISABLE="$VS_STATE/missing" lib vs_lan_ipv6_off
+check "firewall: a missing IPv6 setting is not an error" "0" "$?"
+
+check "go2rtc: the API listens on loopback only" "1" "$(grep -c 'listen: "127.0.0.1:1984"' "$REPO/go2rtc.yaml")"
+check "go2rtc: RTSP stays reachable from the LAN" "1" "$(grep -c 'listen: ":8554"' "$REPO/go2rtc.yaml")"
+
+SEAL_T="$TMP_ROOT/seal"
+mkdir -p "$SEAL_T/pkg/artifact_x" "$SEAL_T/outside"
+echo binary > "$SEAL_T/pkg/artifact_x/valetudo-aarch64"
+echo other > "$SEAL_T/outside/valetudo-aarch64"
+SEAL_SHA=$(shasum -a 256 "$SEAL_T/pkg/artifact_x/valetudo-aarch64" | cut -d' ' -f1)
+SEAL_OTHER=$(shasum -a 256 "$SEAL_T/outside/valetudo-aarch64" | cut -d' ' -f1)
+printf '%s  artifact_x/valetudo-aarch64\n' "$SEAL_SHA" > "$SEAL_T/pkg/SHA256SUMS.txt"
+sealed() { WORK_DIR="$SEAL_T/work" bash -c ". '$REPO/tools/lib.sh'; artifact_sealed \"\$@\" && echo yes || echo no" sealed "$@"; }
+check "sealed copy: the listed path and hash pass" "yes" "$(sealed "$SEAL_T/pkg" "$SEAL_T/pkg/artifact_x/valetudo-aarch64" "$SEAL_SHA")"
+check "sealed copy: a path not in the package fails" "no" "$(sealed "$SEAL_T/pkg" "$SEAL_T/outside/valetudo-aarch64" "$SEAL_OTHER")"
+check "sealed copy: a listed path with another hash fails" "no" "$(sealed "$SEAL_T/pkg" "$SEAL_T/pkg/artifact_x/valetudo-aarch64" "$SEAL_OTHER")"
+check "sealed copy: deploy_binary.sh uses the check" "1" "$(grep -c '^artifact_sealed ' "$REPO/tools/deploy_binary.sh")"
+
+# --- SSH key-only switch ---
+
+KEYS_T="$TMP_ROOT/keys"
+mkdir -p "$KEYS_T/bin" "$KEYS_T/tools"
+cp "$REPO/tools/lib.sh" "$REPO/tools/ssh_keys_only.sh" "$KEYS_T/tools/"
+cat >> "$KEYS_T/tools/lib.sh" <<'STUB'
+rsh_n() { "$TEST_SH" -c "$(printf '%s' "$1" | sed -e "s#/mnt/misc/#$KEYS_ROBOT/#g" -e "s#/tmp/vs_ssh_check.pid#$KEYS_ROBOT/check.pid#g")" < /dev/null; }
+STUB
+cat > "$KEYS_T/bin/ssh" <<'STUB'
+#!/bin/sh
+case "$*" in
+    -G*) echo "hostname 192.0.2.1"; exit 0 ;;
+    -N*) exit 0 ;;
+    *HostName=127.0.0.1*) case "$*" in *HostKeyAlias=192.0.2.1*) ;; *) exit 9 ;; esac; [ "$KEYS_LOGIN" = ok ] ;;
+    *) exit 8 ;;
+esac
+STUB
+cat > "$KEYS_T/bin/dropbear" <<'STUB'
+#!/bin/sh
+[ "$1" = -s ] || exit 3
+[ "$KEYS_SERVER" = ok ] || exit 1
+echo 99999 > "$KEYS_ROBOT/check.pid"
+touch "$KEYS_ROBOT/server_started"
+STUB
+printf '#!/bin/sh\nexit 0\n' > "$KEYS_T/bin/sleep"
+chmod 755 "$KEYS_T/bin/"*
+keys_case() { KEYS_ROBOT="$KEYS_T/$1"; mkdir -p "$KEYS_ROBOT"; echo key > "$KEYS_ROBOT/authorized_keys"; }
+keys_run() {
+    KEYS_ROBOT="$KEYS_ROBOT" KEYS_LOGIN="$1" KEYS_SERVER="${2:-ok}" WORK_DIR="$KEYS_T/work" TEST_SH="$TEST_SH" PATH="$KEYS_T/bin:$PATH" \
+        bash "$KEYS_T/tools/ssh_keys_only.sh" > "$KEYS_ROBOT/output" 2>&1
+    echo $?
+}
+
+keys_case good
+check "ssh_keys_only: passes when the key logs in" "0" "$(keys_run ok)"
+check "ssh_keys_only: it sets the switch" "yes" "$(exists "$KEYS_ROBOT/ssh_disable_passwords")"
+check "ssh_keys_only: it used a temporary server" "yes" "$(exists "$KEYS_ROBOT/server_started")"
+check "ssh_keys_only: the temporary server is stopped" "no" "$(exists "$KEYS_ROBOT/check.pid")"
+keys_case badkey
+check "ssh_keys_only: a failed key login fails" "1" "$(keys_run no)"
+check "ssh_keys_only: a failed key login leaves the switch unset" "no" "$(exists "$KEYS_ROBOT/ssh_disable_passwords")"
+check "ssh_keys_only: a failed key login still stops the server" "no" "$(exists "$KEYS_ROBOT/check.pid")"
+keys_case noserver
+check "ssh_keys_only: no temporary server fails" "1" "$(keys_run ok no)"
+check "ssh_keys_only: no temporary server leaves the switch unset" "no" "$(exists "$KEYS_ROBOT/ssh_disable_passwords")"
+keys_case nokeys
+: > "$KEYS_ROBOT/authorized_keys"
+check "ssh_keys_only: empty authorized_keys fails" "1" "$(keys_run ok)"
+check "ssh_keys_only: empty authorized_keys starts nothing" "no" "$(exists "$KEYS_ROBOT/server_started")"
+check "ssh_keys_only: empty authorized_keys leaves the switch unset" "no" "$(exists "$KEYS_ROBOT/ssh_disable_passwords")"
+
 # --- Deployment stage markers ---
 
 # deploy_native.sh and deploy_reboot_gate.sh read markers that stage 1 writes.

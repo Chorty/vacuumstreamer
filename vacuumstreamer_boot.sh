@@ -13,6 +13,10 @@ if [ "$https_proxy" = "on" ]; then
     vs_background "$VS_DIR/https_proxy.sh"
 fi
 
+if [ "$(vs_switch LAN_FIREWALL off)" = "on" ]; then
+    vs_background "$VS_DIR/lan_firewall.sh"
+fi
+
 [ -f "$VS_DIR/video_monitor" ] || exit 0
 
 camera=$(vs_switch CAMERA on)

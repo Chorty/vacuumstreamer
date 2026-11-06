@@ -16,7 +16,7 @@ MARK="$WORK_DIR/deploy_$DEPLOY"
 [ -f "$ARTIFACT" ] || fail "artifact $ARTIFACT not found"
 EXPECTED=$(sha256 "$ARTIFACT")
 [ -f "$PKG/SHA256SUMS.txt" ] || fail "backup package $PKG is not sealed (tools/seal_package.sh)"
-grep -q " $(basename "$(dirname "$ARTIFACT")")/$(basename "$ARTIFACT")$" "$PKG/SHA256SUMS.txt" && ! grep -q "^$EXPECTED " "$PKG/SHA256SUMS.txt" && fail "artifact differs from the sealed copy"
+artifact_sealed "$PKG" "$ARTIFACT" "$EXPECTED" || fail "artifact is not in the sealed package with this hash"
 valetudo_auth_preflight || fail "Valetudo authentication preflight failed; nothing activated"
 robot_docked_idle_cached || fail "robot is not docked with an idle dock"
 
