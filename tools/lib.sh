@@ -30,7 +30,13 @@ TOOL_LOG="$WORK_DIR/$(basename "$0" .sh).log"
 # recorder_quality_ctl.sh are called by the Valetudo plugin's
 # MicrophoneGainCapability and RecorderQualityCapability; a script missing
 # from this list is never installed, and the capability then fails with ENOENT.
-NATIVE_SCRIPTS="vacuumstreamer_lib.sh go2rtc_launch.sh video_monitor_launch.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh mic_gain_ctl.sh recorder_quality_ctl.sh http_bridge.sh tts_handler.sh https_cert_state.sh https_proxy.sh https_cert_install.sh vacuumstreamer_boot.sh"
+NATIVE_SCRIPTS="vacuumstreamer_lib.sh go2rtc_launch.sh video_monitor_launch.sh camera_wake.sh camera_supervisor.sh camera_ctl.sh mic_gain_ctl.sh recorder_quality_ctl.sh http_bridge.sh tts_handler.sh https_cert_state.sh https_proxy.sh https_cert_install.sh lan_firewall.sh vacuumstreamer_boot.sh"
+
+# artifact_sealed PKG ARTIFACT SHA - true only if the package's seal lists this
+# artifact's own path with this exact hash.
+artifact_sealed() {
+    grep -Fqx "$3  $(basename "$(dirname "$2")")/$(basename "$2")" "$1/SHA256SUMS.txt"
+}
 
 # native_deployed_paths - every robot file a native deployment may replace or
 # edit. Each existing one is preserved as <path>.predeploy_<id> and restored by

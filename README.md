@@ -143,6 +143,7 @@ Or append the vacuumstreamer block to your existing `_root_postboot.sh` — see 
 | `HTTP_BRIDGE` | `on` | The port 6971 bridge (`tts_handler.sh`, run by `http_bridge.sh`) |
 | `HTTP_BRIDGE_ALLOW` | `any` | Addresses allowed to use the bridge, separated by spaces or commas. The robot itself is always allowed; other clients get 403. Read on every request, so no reboot is needed |
 | `HTTPS_PROXY` | `off` | Supervised Caddy entry point on port 443 for Home Assistant; requires a dedicated certificate and the pinned Caddy binary |
+| `LAN_FIREWALL` | `off` | Drops inbound IPv4 on `wlan0` for UDP 54321 and, when `HTTPS_PROXY` is on, TCP 80, and turns IPv6 off on `wlan0`, because this kernel can't filter it. `lan_firewall.sh` checks every 30 s, because the firmware can flush the rules |
 
 The bridge has no login, and it can start cleaning and drive the robot. It is **off on the deployed robot** since 2026-09-24. If enabled on another install, restrict `HTTP_BRIDGE_ALLOW` to the Home Assistant host. The most recently refused address is written to `/tmp/vacuumstreamer/bridge_denied_last`.
 
@@ -196,7 +197,7 @@ are not challenged. Other clients use their application's credential fields
 for these credential-free endpoint URLs:
 
 - **RTSP:** `rtsp://<VACUUM_IP>:8554/vacuum`
-- **API, still frames, HLS and the web UI:** `http://<VACUUM_IP>:1984/api/frame.jpeg?src=vacuum` with HTTP Basic Auth
+- **API, still frames, HLS and the web UI:** only on the robot, at `http://127.0.0.1:1984`, since the API moved to loopback. Use an SSH tunnel to reach them from another device
 
 Keep the login out of command-line URLs and logs. In particular, ffmpeg prints
 a full RTSP URL on errors; `tools/camera_checks.sh` uses an SSH-local RTSP
@@ -211,7 +212,7 @@ The `go2rtc.yaml` configures:
 - **Video source** — `camera_wake.sh`, which starts `video_monitor` on demand and returns its TCP stream on port 6969
 - **Audio source** — `arecord` capturing from the vacuum's microphone
 - **Backchannel** — `play_pcm.sh` receives WebRTC audio and plays through the speaker via `aplay`
-- **API** — Port 1984 (Web UI at `http://<VACUUM_IP>:1984`)
+- **API** — Port 1984 on loopback only (the go2rtc web UI needs an SSH tunnel)
 - **RTSP** — Port 8554 (`rtsp://<VACUUM_IP>:8554/vacuum`)
 - **WebRTC** — Port 8555
 
@@ -241,7 +242,8 @@ off. The bridge endpoints below remain available for installs that opt in to
 Valetudo itself still serves HTTP on port 80. The optional `HTTPS_PROXY=on`
 starts a supervised Caddy proxy on port 443 with a certificate for
 `mattjoslin-valetudo.duckdns.org`. Its Caddyfile accepts only
-`192.168.1.106` (Home Assistant) and robot localhost, then forwards the
+`192.168.1.106` (Home Assistant), `192.168.1.33` (iPhone), `192.168.1.113`
+(Mac) and robot localhost, then forwards the
 original Basic Auth header to Valetudo. It has no credential-bearing access
 log. The DNS name may resolve to the robot's private address; DNS-01
 certificate issuance does not require an inbound internet port.

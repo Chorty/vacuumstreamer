@@ -65,6 +65,7 @@ docker run --rm --network none -v "$BUILD_DIR":/workspace <image> make
 | `deploy_keep_binary.sh ID PKG` | Native-only stage 1: keeps the active binary, preserves it as the rollback copy and writes the markers the later stages need |
 | `deploy_native.sh COMMIT ID` | Installs native runtime files from a commit with hash and BusyBox syntax checks |
 | `deploy_reboot_gate.sh SHA COMMIT ID` | Reboot, 12 consecutive health checks, full rollback and second reboot on failure |
+| `ssh_keys_only.sh` | Make SSH key-only at the next reboot with the firmware's switch, after logging in through a temporary key-only server on loopback |
 | `install_shim.sh SO ID` | Install the pinned build of `vacuumstreamer.so` with a hash check, a loader check, a rollback copy and an atomic swap |
 | `install_caddy.sh CADDY ID` | Install the pinned official Caddy v2.11.4 ARM64 binary without enabling HTTPS |
 | `camera_checks.sh` | Idle stop, cold wake, pause and resume through Valetudo, crash and stall recovery while an RTSP viewer watches |
